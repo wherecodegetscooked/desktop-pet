@@ -326,8 +326,8 @@ _OBJC_IMPL_REFS = []  # keep ctypes IMP callbacks alive forever
 _CG = None
 _CG_COLORSPACE = None
 _LAST_LAYER_BUFFER = None  # pin the ctypes buffer until next frame swaps it
-_kCGImageAlphaPremultipliedLast = 1
-_kCGBitmapByteOrder32Big = 4 << 12
+_kCGImageAlphaPremultipliedFirst = 2
+_kCGBitmapByteOrder32Little = 2 << 12
 
 
 def _load_sdl2():
@@ -587,7 +587,7 @@ def push_surface_to_layer(surf):
     compositor ever sees it, which is why the window renders opaque
     black under transparent pixels. We bypass that path entirely:
     pygame draws into an off-screen SRCALPHA surface, we wrap its
-    bytes in a CGImage with kCGImageAlphaPremultipliedLast, and hand
+    bytes in a CGImage with kCGImageAlphaPremultipliedFirst, and hand
     it to the CALayer directly."""
     global _LAST_LAYER_BUFFER, _CG, _CG_COLORSPACE
     import ctypes
@@ -604,7 +604,13 @@ def push_surface_to_layer(surf):
     if not layer:
         return
 
-    pixels = pygame.image.tobytes(surf, 'RGBA')
+    # Core Graphics is happiest with the native macOS layer format:
+    # BGRA bytes plus kCGImageAlphaPremultipliedFirst/32Little. Supplying
+    # straight RGBA here can make transparent pixels composite as black on
+    # some SDL/Cocoa paths.
+    if hasattr(surf, 'premul_alpha'):
+        surf = surf.premul_alpha()
+    pixels = pygame.image.tobytes(surf, 'BGRA')
     w, h = surf.get_width(), surf.get_height()
     buf = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
 
@@ -614,7 +620,7 @@ def push_surface_to_layer(surf):
 
     cgimage = _CG.CGImageCreate(
         w, h, 8, 32, w * 4, _CG_COLORSPACE,
-        _kCGImageAlphaPremultipliedLast | _kCGBitmapByteOrder32Big,
+        _kCGImageAlphaPremultipliedFirst | _kCGBitmapByteOrder32Little,
         provider, None, False, 0
     )
     if cgimage:
