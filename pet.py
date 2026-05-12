@@ -319,6 +319,7 @@ _MAC_WINDOW = None
 _SDL2 = None
 _SDL_WINDOW = None  # SDL_Window* as an integer
 _PRIMARY_HEIGHT = 0  # primary display height in points, set in main()
+_OBJC_IMPL_REFS = []  # keep ctypes IMP callbacks alive forever
 
 
 def _load_sdl2():
@@ -370,6 +371,63 @@ def move_window(x, y):
        ctypes.c_double(float(x)), ctypes.c_double(float(flipped_y)))
 
 
+def _swizzle_view_isopaque_no(objc, view):
+    """Force `view`'s isOpaque to return NO via runtime subclassing.
+
+    NSView has no setOpaque: setter — isOpaque is a method returning YES by
+    default. While layer-backed (wantsLayer=YES), Cocoa's drawing pipeline
+    only preserves per-pixel alpha if the view's isOpaque returns NO. We
+    create a one-off subclass of the view's current class that overrides
+    isOpaque, then isa-swizzle the live instance into it. SDL2's drawRect:
+    implementation is inherited unchanged."""
+    import ctypes
+
+    objc.object_getClass.restype  = ctypes.c_void_p
+    objc.object_getClass.argtypes = [ctypes.c_void_p]
+    objc.class_getName.restype    = ctypes.c_char_p
+    objc.class_getName.argtypes   = [ctypes.c_void_p]
+    objc.objc_allocateClassPair.restype  = ctypes.c_void_p
+    objc.objc_allocateClassPair.argtypes = [ctypes.c_void_p,
+                                            ctypes.c_char_p,
+                                            ctypes.c_size_t]
+    objc.objc_registerClassPair.argtypes = [ctypes.c_void_p]
+    objc.class_addMethod.restype  = ctypes.c_bool
+    objc.class_addMethod.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                     ctypes.c_void_p, ctypes.c_char_p]
+    objc.object_setClass.restype  = ctypes.c_void_p
+    objc.object_setClass.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    objc.objc_getClass.restype    = ctypes.c_void_p
+    objc.objc_getClass.argtypes   = [ctypes.c_char_p]
+
+    current_cls = objc.object_getClass(view)
+    if not current_cls:
+        return
+    base_name = objc.class_getName(current_cls).decode()
+    new_name  = ('PetTransparent_' + base_name).encode()
+
+    new_cls = objc.objc_getClass(new_name)  # already registered?
+    if not new_cls:
+        new_cls = objc.objc_allocateClassPair(current_cls, new_name, 0)
+        if not new_cls:
+            return
+
+        IMPTYPE = ctypes.CFUNCTYPE(ctypes.c_bool,
+                                   ctypes.c_void_p, ctypes.c_void_p)
+        @IMPTYPE
+        def _is_opaque(_self, _cmd):
+            return False
+        _OBJC_IMPL_REFS.append(_is_opaque)  # prevent GC
+
+        sel = objc.sel_registerName(b'isOpaque')
+        objc.class_addMethod(new_cls, sel,
+                             ctypes.cast(_is_opaque, ctypes.c_void_p),
+                             b'B@:')
+        objc.objc_registerClassPair(new_cls)
+
+    objc.object_setClass(view, new_cls)
+    print(f"Swizzled contentView: {base_name} -> {new_name.decode()}")
+
+
 def configure_macos_window():
     global _MAC_OBJC, _MAC_WINDOW
     import ctypes
@@ -416,6 +474,7 @@ def configure_macos_window():
         # opaque and transparent pixels show as black.
         content_view = _msg(objc, window, 'contentView')
         if content_view:
+            _swizzle_view_isopaque_no(objc, content_view)
             _msg(objc, content_view, 'setWantsLayer:', True,
                  argtypes=[ctypes.c_bool])
             layer = _msg(objc, content_view, 'layer')
