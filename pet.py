@@ -7,7 +7,7 @@ import time
 
 SCALE = 4
 FPS = 60
-SPRITE_W, SPRITE_H = 9, 10  # pixel canvas size before scale
+SPRITE_W, SPRITE_H = 16, 10  # pixel canvas size before scale
 
 class State:
     IDLE = "idle"
@@ -24,44 +24,58 @@ CLEAR      = (0, 0, 0, 0)
 # ---------------------------------------------------------------------------
 
 def draw_pet_pixels(px, facing_right, anim_frame, state, blink):
-    """Draw onto a 9×10 SRCALPHA surface (pixel art, no scaling)."""
+    """Draw onto a 16×10 SRCALPHA surface (pixel art, no scaling).
+
+    Design coords are bottom-left origin; pygame is top-left so pg_y = 9 -
+    cart_y. Resulting pygame coords:
+      body   x 2..13   y 0..7      (cart y 2..9)
+      L arm  x 0..1    y 4..5      (cart y 4..5)
+      R arm  x 14..15  y 3..5      (cart y 4..6)
+      eyes   (4, 2-3) and (11, 2-3)  (cart y 6..7)
+      legs   at x 3, 5, 10, 12;  y 8..9 (cart y 0..1)
+    """
     px.fill(CLEAR)
     C = PET_COLOR
     E = EYE_COLOR
 
-    # Body 5×3 at (2,2)
-    for bx in range(5):
-        for by in range(3):
-            px.set_at((2 + bx, 2 + by), C)
+    # Body
+    for bx in range(2, 14):
+        for by in range(0, 8):
+            px.set_at((bx, by), C)
 
-    # Arm stubs
-    px.set_at((1, 3), C)
-    px.set_at((7, 3), C)
+    # Left arm  (2×2)
+    for ax in range(0, 2):
+        for ay in range(4, 6):
+            px.set_at((ax, ay), C)
 
-    # 4 legs, x = 2,3,5,6
-    leg_xs = [2, 3, 5, 6]
+    # Right arm  (2×3)
+    for ax in range(14, 16):
+        for ay in range(3, 6):
+            px.set_at((ax, ay), C)
+
+    # Legs — 1×2 normally, 1×1 when "up" during walk/run.
+    leg_xs = [3, 5, 10, 12]
     if state in (State.WALK, State.RUN):
         speed = 3 if state == State.WALK else 2
         phase = (anim_frame // speed) % 2
     else:
-        phase = 0  # both legs down when idle/jump
+        phase = 0  # both pairs down when idle/jump
 
     for i, lx in enumerate(leg_xs):
         up = (state in (State.WALK, State.RUN)) and ((i % 2) == phase)
         if up:
-            px.set_at((lx, 5), C)               # 1-pixel-up leg
+            px.set_at((lx, 8), C)             # shortened — 1 pixel
         else:
-            px.set_at((lx, 5), C)
-            px.set_at((lx, 6), C)               # 2-pixel leg
+            px.set_at((lx, 8), C)
+            px.set_at((lx, 9), C)             # 2-pixel leg
 
-    # Eyes (2 pixels on upper body row y=2)
+    # Eyes — 1×2 each at x=4 and x=11. Sprite is symmetric so we draw both
+    # regardless of facing direction; blink hides them.
     if not blink:
-        if facing_right:
-            px.set_at((6, 2), E)
-            px.set_at((8, 2), E)
-        else:
-            px.set_at((3, 3), E)
-            px.set_at((5, 3), E)
+        px.set_at((4, 2), E)
+        px.set_at((4, 3), E)
+        px.set_at((11, 2), E)
+        px.set_at((11, 3), E)
 
 
 def make_sprite(facing_right, anim_frame, state, blink):
