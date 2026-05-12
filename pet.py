@@ -1,171 +1,354 @@
+import ctypes
+import ctypes.util
 import math
 import random
+import signal
 import sys
-from pathlib import Path
+import time
 
-try:
-    from PyQt6.QtCore import QPoint, QRect, Qt, QTimer
-    from PyQt6.QtGui import QPainter, QPixmap, QTransform
-    from PyQt6.QtWidgets import QApplication, QWidget
-except ImportError as exc:
-    raise SystemExit(
-        "PyQt6 is required for the transparent desktop pet.\n"
-        "Install dependencies with: pip install -r requirements.txt"
-    ) from exc
+import pygame
 
 
 FPS = 60
-SPRITE_HEIGHT = 128
-ANIMATION_MS = 140
+SCALE = 6
+SPRITE_W = 20
+SPRITE_H = 18
+WINDOW_W = SPRITE_W * SCALE
+WINDOW_H = SPRITE_H * SCALE
+
+PET_COLOR = (236, 145, 92, 255)
+PET_SHADE = (195, 92, 72, 255)
+BELLY_COLOR = (255, 198, 139, 255)
+EYE_COLOR = (26, 20, 18, 255)
+HIGHLIGHT = (255, 221, 176, 255)
+CLEAR = (0, 0, 0, 0)
+
+NS_BACKING_STORE_BUFFERED = 2
+NS_WINDOW_STYLE_BORDERLESS = 0
+NS_WINDOW_STYLE_NONACTIVATING_PANEL = 1 << 7
+NS_WINDOW_COLLECTION_CAN_JOIN_ALL_SPACES = 1 << 0
+NS_WINDOW_COLLECTION_IGNORES_CYCLE = 1 << 6
+NS_WINDOW_COLLECTION_FULLSCREEN_AUXILIARY = 1 << 8
+NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
+CG_WINDOW_LEVEL_ASSISTIVE_TECH_HIGH = 20
 
 
 class State:
-    IDLE = "idle"
-    WALK = "walk"
-    RUN = "run"
-    JUMP = "jump"
+    IDLE = "IDLE"
+    WALK = "WALK"
+    RUN = "RUN"
+    JUMP = "JUMP"
 
 
-def find_sprite_files():
-    root = Path(__file__).resolve().parent
-    patterns = [
-        "assets/pet/*.png",
-        "assets/*.png",
-        "frames/*.png",
-        "sprite*.png",
+class NSPoint(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+
+class NSSize(ctypes.Structure):
+    _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+
+class NSRect(ctypes.Structure):
+    _fields_ = [("origin", NSPoint), ("size", NSSize)]
+
+
+class CGRect(ctypes.Structure):
+    _fields_ = [
+        ("x", ctypes.c_double),
+        ("y", ctypes.c_double),
+        ("w", ctypes.c_double),
+        ("h", ctypes.c_double),
     ]
-    files = []
-    for pattern in patterns:
-        files.extend(root.glob(pattern))
-    return sorted(dict.fromkeys(files))
 
 
-def load_frames():
-    frames = []
-    for path in find_sprite_files():
-        pixmap = QPixmap(str(path))
-        if not pixmap.isNull():
-            frames.append(pixmap)
+def _objc_setup():
+    objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+    objc.objc_getClass.restype = ctypes.c_void_p
+    objc.objc_getClass.argtypes = [ctypes.c_char_p]
+    objc.sel_registerName.restype = ctypes.c_void_p
+    objc.sel_registerName.argtypes = [ctypes.c_char_p]
+    return objc
 
-    if not frames:
-        raise SystemExit(
-            "No sprite PNGs found. Add sprite.png, sprite_01.png, or PNGs in "
-            "assets/pet/."
+
+def _msg(objc, obj, selector, *args, restype=None, argtypes=None):
+    sel = objc.sel_registerName(selector.encode())
+    if restype is None:
+        restype = ctypes.c_void_p
+    if argtypes is None:
+        argtypes = [ctypes.c_void_p] * len(args)
+
+    proto = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p, *argtypes)
+    fn = ctypes.cast(objc.objc_msgSend, proto)
+    converted = []
+    for argtype, value in zip(argtypes, args):
+        if isinstance(value, ctypes._SimpleCData) or isinstance(value, argtype):
+            converted.append(value)
+        else:
+            converted.append(argtype(value))
+    return fn(obj, sel, *converted)
+
+
+class MacOverlay:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        self.objc = _objc_setup()
+        self.cg = self._load_core_graphics()
+        self.colorspace = self.cg.CGColorSpaceCreateDeviceRGB()
+        self.nsapp = None
+        self.window = None
+        self.layer = None
+        self.last_buffer = None
+        self.level = self.cg.CGWindowLevelForKey(CG_WINDOW_LEVEL_ASSISTIVE_TECH_HIGH)
+
+        self._create_window()
+
+    def _load_core_graphics(self):
+        cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
+        cg.CGMainDisplayID.restype = ctypes.c_uint32
+        cg.CGDisplayBounds.restype = CGRect
+        cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+        cg.CGWindowLevelForKey.restype = ctypes.c_int
+        cg.CGWindowLevelForKey.argtypes = [ctypes.c_int]
+        cg.CGColorSpaceCreateDeviceRGB.restype = ctypes.c_void_p
+        cg.CGDataProviderCreateWithData.restype = ctypes.c_void_p
+        cg.CGDataProviderCreateWithData.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        ]
+        cg.CGDataProviderRelease.argtypes = [ctypes.c_void_p]
+        cg.CGImageCreate.restype = ctypes.c_void_p
+        cg.CGImageCreate.argtypes = [
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_bool,
+            ctypes.c_int,
+        ]
+        cg.CGImageRelease.argtypes = [ctypes.c_void_p]
+        return cg
+
+    def _create_window(self):
+        objc = self.objc
+        NSApplication = objc.objc_getClass(b"NSApplication")
+        NSPanel = objc.objc_getClass(b"NSPanel")
+        NSColor = objc.objc_getClass(b"NSColor")
+        NSString = objc.objc_getClass(b"NSString")
+
+        self.nsapp = _msg(objc, NSApplication, "sharedApplication")
+        _msg(objc, self.nsapp, "finishLaunching")
+        _msg(
+            objc,
+            self.nsapp,
+            "setActivationPolicy:",
+            NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY,
+            argtypes=[ctypes.c_long],
+            restype=ctypes.c_bool,
         )
 
-    return frames
+        rect = NSRect(NSPoint(200, 200), NSSize(self.width, self.height))
+        style = NS_WINDOW_STYLE_BORDERLESS | NS_WINDOW_STYLE_NONACTIVATING_PANEL
+        panel = _msg(objc, NSPanel, "alloc")
+        self.window = _msg(
+            objc,
+            panel,
+            "initWithContentRect:styleMask:backing:defer:",
+            rect,
+            style,
+            NS_BACKING_STORE_BUFFERED,
+            False,
+            argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool],
+        )
+
+        clear = _msg(objc, NSColor, "clearColor")
+        _msg(objc, self.window, "setOpaque:", False, argtypes=[ctypes.c_bool])
+        _msg(objc, self.window, "setBackgroundColor:", clear)
+        _msg(objc, self.window, "setHasShadow:", False, argtypes=[ctypes.c_bool])
+        _msg(objc, self.window, "setIgnoresMouseEvents:", True, argtypes=[ctypes.c_bool])
+        _msg(objc, self.window, "setCanHide:", False, argtypes=[ctypes.c_bool])
+        _msg(objc, self.window, "setReleasedWhenClosed:", False, argtypes=[ctypes.c_bool])
+        _msg(objc, self.window, "setAlphaValue:", 1.0, argtypes=[ctypes.c_double])
+
+        behavior = (
+            NS_WINDOW_COLLECTION_CAN_JOIN_ALL_SPACES
+            | NS_WINDOW_COLLECTION_IGNORES_CYCLE
+            | NS_WINDOW_COLLECTION_FULLSCREEN_AUXILIARY
+        )
+        _msg(objc, self.window, "setCollectionBehavior:", behavior, argtypes=[ctypes.c_ulong])
+        self.reassert_top()
+
+        view = _msg(objc, self.window, "contentView")
+        _msg(objc, view, "setWantsLayer:", True, argtypes=[ctypes.c_bool])
+        self.layer = _msg(objc, view, "layer")
+        _msg(objc, self.layer, "setOpaque:", False, argtypes=[ctypes.c_bool])
+        clear_cg = _msg(objc, clear, "CGColor")
+        _msg(objc, self.layer, "setBackgroundColor:", clear_cg)
+
+        nearest = _msg(
+            objc,
+            NSString,
+            "stringWithUTF8String:",
+            b"nearest",
+            argtypes=[ctypes.c_char_p],
+        )
+        _msg(objc, self.layer, "setMagnificationFilter:", nearest)
+        _msg(objc, self.layer, "setMinificationFilter:", nearest)
+        _msg(objc, self.window, "orderFrontRegardless")
+
+    def screen_bounds(self):
+        bounds = self.cg.CGDisplayBounds(self.cg.CGMainDisplayID())
+        return int(bounds.x), int(bounds.y), int(bounds.w), int(bounds.h)
+
+    def reassert_top(self):
+        _msg(self.objc, self.window, "setLevel:", self.level, argtypes=[ctypes.c_long])
+        _msg(self.objc, self.window, "orderFrontRegardless")
+
+    def move(self, x, y):
+        _, _, _, screen_h = self.screen_bounds()
+        flipped_y = screen_h - y - self.height
+        sel = self.objc.sel_registerName(b"setFrameOrigin:")
+        proto = ctypes.CFUNCTYPE(
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_double,
+            ctypes.c_double,
+        )
+        fn = ctypes.cast(self.objc.objc_msgSend, proto)
+        fn(self.window, sel, ctypes.c_double(float(x)), ctypes.c_double(float(flipped_y)))
+
+    def show_surface(self, surface):
+        if hasattr(surface, "premul_alpha"):
+            surface = surface.premul_alpha()
+        pixels = pygame.image.tobytes(surface, "BGRA")
+        buf = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
+        provider = self.cg.CGDataProviderCreateWithData(None, buf, len(pixels), None)
+        if not provider:
+            return
+
+        kCGImageAlphaPremultipliedFirst = 2
+        kCGBitmapByteOrder32Little = 2 << 12
+        image = self.cg.CGImageCreate(
+            surface.get_width(),
+            surface.get_height(),
+            8,
+            32,
+            surface.get_width() * 4,
+            self.colorspace,
+            kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
+            provider,
+            None,
+            False,
+            0,
+        )
+        if image:
+            _msg(self.objc, self.layer, "setContents:", image)
+            self.cg.CGImageRelease(image)
+        self.cg.CGDataProviderRelease(provider)
+        self.last_buffer = buf
+
+    def pump_events(self):
+        NSDate = self.objc.objc_getClass(b"NSDate")
+        NSString = self.objc.objc_getClass(b"NSString")
+        distant_past = _msg(self.objc, NSDate, "distantPast")
+        mode = _msg(
+            self.objc,
+            NSString,
+            "stringWithUTF8String:",
+            b"kCFRunLoopDefaultMode",
+            argtypes=[ctypes.c_char_p],
+        )
+        event = True
+        while event:
+            event = _msg(
+                self.objc,
+                self.nsapp,
+                "nextEventMatchingMask:untilDate:inMode:dequeue:",
+                (1 << 64) - 1,
+                distant_past,
+                mode,
+                True,
+                argtypes=[
+                    ctypes.c_ulonglong,
+                    ctypes.c_void_p,
+                    ctypes.c_void_p,
+                    ctypes.c_bool,
+                ],
+            )
+            if event:
+                _msg(self.objc, self.nsapp, "sendEvent:", event)
+        _msg(self.objc, self.nsapp, "updateWindows")
 
 
-def scaled_frame(frame):
-    return frame.scaledToHeight(
-        SPRITE_HEIGHT,
-        Qt.TransformationMode.SmoothTransformation,
-    )
-
-
-class PetWindow(QWidget):
-    def __init__(self):
-        super().__init__()
-
-        self.frames = [scaled_frame(frame) for frame in load_frames()]
-        self.frame_index = 0
-        self.frame_ticks = 0
-        self.current_frame = self.frames[0]
-
-        self.screen_rect = self._screen_rect()
-        self.x = float(self.screen_rect.center().x())
-        self.y = float(self.screen_rect.center().y())
+class Pet:
+    def __init__(self, screen_w, screen_h):
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self.x = float(screen_w // 2)
+        self.y = float(screen_h // 2)
         self.vx = 0.0
         self.vy = 0.0
         self.state = State.IDLE
         self.state_timer = 0
         self.facing_right = True
-        self.jump_vy = 0.0
+        self.frame = 0
+        self.blink = False
+        self.blink_timer = random.randint(90, 240)
+        self.look_offset = 0
+        self.look_timer = random.randint(60, 180)
         self.ground_y = self.y
+        self.jump_vy = 0.0
+        self.pick_state()
 
-        self._configure_window()
-        self._resize_to_frame()
-        self._pick_state()
-
-        self.tick_timer = QTimer(self)
-        self.tick_timer.timeout.connect(self.tick)
-        self.tick_timer.start(round(1000 / FPS))
-
-    def _configure_window(self):
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        self.setWindowFlags(flags)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-
-    def _screen_rect(self):
-        screen = QApplication.primaryScreen()
-        if screen is None:
-            return QRect(0, 0, 1440, 900)
-        return screen.availableGeometry()
-
-    def _resize_to_frame(self):
-        max_width = max(frame.width() for frame in self.frames)
-        max_height = max(frame.height() for frame in self.frames)
-        self.setFixedSize(max_width, max_height)
-
-    def _pick_state(self):
+    def pick_state(self):
         r = random.random()
-        if r < 0.45:
+        if r < 0.55:
             self.state = State.WALK
-            speed = random.uniform(0.8, 1.8)
-            angle = random.uniform(-0.25, 0.25)
+            speed = random.uniform(0.7, 1.8)
             direction = 1 if random.random() > 0.5 else -1
-            self.vx = direction * speed * math.cos(angle)
-            self.vy = speed * math.sin(angle)
-            self.state_timer = random.randint(90, 300)
-        elif r < 0.65:
+            self.vx = direction * speed
+            self.vy = random.uniform(-0.25, 0.25)
+            self.state_timer = random.randint(100, 300)
+        elif r < 0.75:
             self.state = State.IDLE
             self.vx = 0.0
             self.vy = 0.0
-            self.state_timer = random.randint(60, 180)
-        elif r < 0.82:
+            self.state_timer = random.randint(70, 190)
+        elif r < 0.9:
             self.state = State.RUN
-            speed = random.uniform(3.0, 5.5)
+            speed = random.uniform(3.0, 5.6)
             direction = 1 if random.random() > 0.5 else -1
             self.vx = direction * speed
-            self.vy = random.uniform(-0.4, 0.4)
-            self.state_timer = random.randint(45, 120)
+            self.vy = random.uniform(-0.35, 0.35)
+            self.state_timer = random.randint(45, 115)
         else:
             self.state = State.JUMP
             self.ground_y = self.y
-            self.jump_vy = random.uniform(-9, -5)
+            self.jump_vy = random.uniform(-8.5, -5.5)
             self.vx = random.uniform(-2.5, 2.5)
             self.vy = 0.0
-            self.state_timer = 600
+            self.state_timer = 240
 
-    def tick(self):
-        self.frame_ticks += round(1000 / FPS)
-        if self.frame_ticks >= ANIMATION_MS:
-            self.frame_ticks = 0
-            self.frame_index = (self.frame_index + 1) % len(self.frames)
-            self.current_frame = self.frames[self.frame_index]
-
-        self._update_motion()
-        self.move(round(self.x), round(self.y))
-        self.update()
-
-    def _update_motion(self):
+    def update(self):
+        self.frame += 1
         self.state_timer -= 1
+        self._update_face()
 
         if self.state == State.JUMP:
-            self.jump_vy += 0.45
+            self.jump_vy += 0.42
             self.y += self.jump_vy
             self.x += self.vx
             if self.y >= self.ground_y:
                 self.y = self.ground_y
-                self._pick_state()
+                self.pick_state()
         else:
             self.x += self.vx
             self.y += self.vy
@@ -175,55 +358,165 @@ class PetWindow(QWidget):
         elif self.vx < -0.1:
             self.facing_right = False
 
-        left = self.screen_rect.left()
-        top = self.screen_rect.top()
-        right = self.screen_rect.right() - self.width()
-        bottom = self.screen_rect.bottom() - self.height()
-
-        if self.x < left:
-            self.x = left
+        if self.x < 0:
+            self.x = 0
             self.vx = abs(self.vx)
-        elif self.x > right:
-            self.x = right
+            self.facing_right = True
+        elif self.x + WINDOW_W > self.screen_w:
+            self.x = self.screen_w - WINDOW_W
             self.vx = -abs(self.vx)
+            self.facing_right = False
 
-        if self.y < top:
-            self.y = top
+        if self.y < 0:
+            self.y = 0
+            self.vy = abs(self.vy)
             if self.state == State.JUMP:
-                self.jump_vy = abs(self.jump_vy) * 0.4
-            else:
-                self.vy = abs(self.vy)
-        elif self.y > bottom:
-            self.y = bottom
+                self.jump_vy = abs(self.jump_vy) * 0.35
+        elif self.y + WINDOW_H > self.screen_h:
+            self.y = self.screen_h - WINDOW_H
             if self.state == State.JUMP:
-                self.jump_vy = 0
+                self.jump_vy = 0.0
+                self.pick_state()
             else:
                 self.vy = -abs(self.vy)
 
         if self.state_timer <= 0:
-            self._pick_state()
+            self.pick_state()
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+    def _update_face(self):
+        self.blink_timer -= 1
+        if self.blink_timer <= 0:
+            if self.blink:
+                self.blink = False
+                self.blink_timer = random.randint(100, 260)
+            else:
+                self.blink = True
+                self.blink_timer = random.randint(5, 9)
 
-        frame = self.current_frame
-        if not self.facing_right:
-            frame = frame.transformed(QTransform().scale(-1, 1))
+        self.look_timer -= 1
+        if self.look_timer <= 0:
+            self.look_offset = random.choice([-1, 0, 1])
+            self.look_timer = random.randint(45, 160)
 
-        x = (self.width() - frame.width()) // 2
-        y = (self.height() - frame.height()) // 2
-        painter.drawPixmap(QPoint(x, y), frame)
+
+def px(surface, x, y, color):
+    if 0 <= x < SPRITE_W and 0 <= y < SPRITE_H:
+        surface.set_at((x, y), color)
+
+
+def rect(surface, x, y, w, h, color):
+    for yy in range(y, y + h):
+        for xx in range(x, x + w):
+            px(surface, xx, yy, color)
+
+
+def draw_pet_frame(pet):
+    small = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
+    small.fill(CLEAR)
+
+    bob = 0
+    if pet.state in (State.WALK, State.RUN):
+        step_speed = 7 if pet.state == State.WALK else 4
+        bob = 1 if (pet.frame // step_speed) % 2 else 0
+    if pet.state == State.JUMP:
+        bob = -1
+
+    body_y = 4 + bob
+    rect(small, 5, body_y + 1, 10, 8, PET_COLOR)
+    rect(small, 4, body_y + 3, 12, 5, PET_COLOR)
+    rect(small, 7, body_y + 6, 6, 4, BELLY_COLOR)
+    rect(small, 6, body_y + 1, 2, 1, HIGHLIGHT)
+    rect(small, 13, body_y + 4, 2, 4, PET_SHADE)
+
+    # Ears
+    px(small, 5, body_y, PET_COLOR)
+    px(small, 6, body_y - 1, PET_COLOR)
+    px(small, 14, body_y, PET_COLOR)
+    px(small, 13, body_y - 1, PET_COLOR)
+
+    # Arms
+    arm_swing = 1 if (pet.frame // 7) % 2 else 0
+    if pet.state == State.IDLE:
+        arm_swing = 0
+    rect(small, 3, body_y + 6 - arm_swing, 2, 2, PET_COLOR)
+    rect(small, 15, body_y + 5 + arm_swing, 2, 2, PET_COLOR)
+
+    # Legs
+    phase = (pet.frame // (7 if pet.state == State.WALK else 4)) % 2
+    leg_lift = pet.state in (State.WALK, State.RUN)
+    for i, leg_x in enumerate([6, 9, 12, 14]):
+        lifted = leg_lift and (i % 2 == phase)
+        leg_h = 1 if lifted else 3
+        rect(small, leg_x, body_y + 9, 1, leg_h, PET_SHADE)
+
+    # Face
+    eye_y = body_y + 4
+    left_eye_x = 7 + pet.look_offset
+    right_eye_x = 12 + pet.look_offset
+    if pet.blink:
+        rect(small, left_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
+        rect(small, right_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
+    else:
+        rect(small, left_eye_x, eye_y, 1, 2, EYE_COLOR)
+        rect(small, right_eye_x, eye_y, 1, 2, EYE_COLOR)
+        px(small, left_eye_x, eye_y, HIGHLIGHT)
+        px(small, right_eye_x, eye_y, HIGHLIGHT)
+
+    mouth_y = body_y + 7
+    if pet.state == State.RUN:
+        rect(small, 9, mouth_y, 2, 1, EYE_COLOR)
+    elif pet.state == State.JUMP:
+        px(small, 10, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
+    else:
+        px(small, 9, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
+        px(small, 11, mouth_y, EYE_COLOR)
+
+    if not pet.facing_right:
+        small = pygame.transform.flip(small, True, False)
+
+    return pygame.transform.scale(small, (WINDOW_W, WINDOW_H))
 
 
 def main():
-    app = QApplication(sys.argv)
-    app.setQuitOnLastWindowClosed(True)
+    if sys.platform != "darwin":
+        raise SystemExit("This overlay implementation is for macOS.")
 
-    pet = PetWindow()
-    pet.show()
+    running = True
 
-    sys.exit(app.exec())
+    def stop(_signum=None, _frame=None):
+        nonlocal running
+        running = False
+
+    signal.signal(signal.SIGINT, stop)
+    signal.signal(signal.SIGTERM, stop)
+
+    pygame.init()
+    overlay = MacOverlay(WINDOW_W, WINDOW_H)
+    _, _, screen_w, screen_h = overlay.screen_bounds()
+    pet = Pet(screen_w, screen_h)
+    canvas = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
+    clock = pygame.time.Clock()
+    last_reassert = 0.0
+
+    while running:
+        pet.update()
+        canvas.fill(CLEAR)
+        canvas.blit(draw_pet_frame(pet), (0, 0))
+
+        overlay.move(round(pet.x), round(pet.y))
+        overlay.show_surface(canvas)
+        overlay.pump_events()
+
+        now = time.monotonic()
+        if now - last_reassert > 0.5:
+            overlay.reassert_top()
+            last_reassert = now
+
+        clock.tick(FPS)
+
+    pygame.quit()
 
 
 if __name__ == "__main__":
