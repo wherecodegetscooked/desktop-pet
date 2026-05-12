@@ -1,122 +1,129 @@
-import pygame
-import sys
-import random
 import math
-import os
-import time
+import random
+import sys
+from pathlib import Path
 
-SCALE = 4
+try:
+    from PyQt6.QtCore import QPoint, QRect, Qt, QTimer
+    from PyQt6.QtGui import QPainter, QPixmap, QTransform
+    from PyQt6.QtWidgets import QApplication, QWidget
+except ImportError as exc:
+    raise SystemExit(
+        "PyQt6 is required for the transparent desktop pet.\n"
+        "Install dependencies with: pip install -r requirements.txt"
+    ) from exc
+
+
 FPS = 60
-SPRITE_W, SPRITE_H = 16, 10  # pixel canvas size before scale
+SPRITE_HEIGHT = 128
+ANIMATION_MS = 140
+
 
 class State:
     IDLE = "idle"
     WALK = "walk"
-    RUN  = "run"
+    RUN = "run"
     JUMP = "jump"
 
-PET_COLOR  = (232, 132, 92, 255)
-EYE_COLOR  = (30,  20,  10, 255)
-CLEAR      = (0, 0, 0, 0)
 
-# ---------------------------------------------------------------------------
-# Sprite drawing
-# ---------------------------------------------------------------------------
-
-def draw_pet_pixels(px, facing_right, anim_frame, state, blink):
-    """Draw onto a 16×10 SRCALPHA surface (pixel art, no scaling).
-
-    Design coords are bottom-left origin; pygame is top-left so pg_y = 9 -
-    cart_y. Resulting pygame coords:
-      body   x 2..13   y 0..7      (cart y 2..9)
-      L arm  x 0..1    y 4..5      (cart y 4..5)
-      R arm  x 14..15  y 4..5      (cart y 4..6)
-      eyes   (4, 2-3) and (11, 2-3)  (cart y 6..7)
-      legs   at x 3, 5, 10, 12;  y 8..9 (cart y 0..1)
-    """
-    px.fill(CLEAR)
-    C = PET_COLOR
-    E = EYE_COLOR
-
-    # Body
-    for bx in range(2, 14):
-        for by in range(0, 8):
-            px.set_at((bx, by), C)
-
-    # Left arm  (2×2)
-    for ax in range(0, 2):
-        for ay in range(4, 6):
-            px.set_at((ax, ay), C)
-
-    # Right arm  (2×3)
-    for ax in range(14, 16):
-        for ay in range(4, 6):
-            px.set_at((ax, ay), C)
-
-    # Legs — 1×2 normally, 1×1 when "up" during walk/run.
-    leg_xs = [3, 5, 10, 12]
-    if state in (State.WALK, State.RUN):
-        speed = 3 if state == State.WALK else 2
-        phase = (anim_frame // speed) % 2
-    else:
-        phase = 0  # both pairs down when idle/jump
-
-    for i, lx in enumerate(leg_xs):
-        up = (state in (State.WALK, State.RUN)) and ((i % 2) == phase)
-        if up:
-            px.set_at((lx, 8), C)             # shortened — 1 pixel
-        else:
-            px.set_at((lx, 8), C)
-            px.set_at((lx, 9), C)             # 2-pixel leg
-
-    # Eyes — 1×2 each at x=4 and x=11. Sprite is symmetric so we draw both
-    # regardless of facing direction; blink hides them.
-    if not blink:
-        px.set_at((4, 2), E)
-        px.set_at((4, 3), E)
-        px.set_at((11, 2), E)
-        px.set_at((11, 3), E)
+def find_sprite_files():
+    root = Path(__file__).resolve().parent
+    patterns = [
+        "assets/pet/*.png",
+        "assets/*.png",
+        "frames/*.png",
+        "sprite*.png",
+    ]
+    files = []
+    for pattern in patterns:
+        files.extend(root.glob(pattern))
+    return sorted(dict.fromkeys(files))
 
 
-def make_sprite(facing_right, anim_frame, state, blink):
-    small = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
-    draw_pet_pixels(small, facing_right, anim_frame, state, blink)
-    big = pygame.transform.scale(small, (SPRITE_W * SCALE, SPRITE_H * SCALE))
-    return big
+def load_frames():
+    frames = []
+    for path in find_sprite_files():
+        pixmap = QPixmap(str(path))
+        if not pixmap.isNull():
+            frames.append(pixmap)
+
+    if not frames:
+        raise SystemExit(
+            "No sprite PNGs found. Add sprite.png, sprite_01.png, or PNGs in "
+            "assets/pet/."
+        )
+
+    return frames
 
 
-# ---------------------------------------------------------------------------
-# Pet entity
-# ---------------------------------------------------------------------------
+def scaled_frame(frame):
+    return frame.scaledToHeight(
+        SPRITE_HEIGHT,
+        Qt.TransformationMode.SmoothTransformation,
+    )
 
-class Pet:
-    def __init__(self, sw, sh):
-        self.sw = sw
-        self.sh = sh
-        self.x = float(sw // 2)
-        self.y = float(sh // 2)
+
+class PetWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        self.frames = [scaled_frame(frame) for frame in load_frames()]
+        self.frame_index = 0
+        self.frame_ticks = 0
+        self.current_frame = self.frames[0]
+
+        self.screen_rect = self._screen_rect()
+        self.x = float(self.screen_rect.center().x())
+        self.y = float(self.screen_rect.center().y())
         self.vx = 0.0
         self.vy = 0.0
-        self.state = State.WALK
-        self.facing_right = True
-        self.frame = 0
+        self.state = State.IDLE
         self.state_timer = 0
-        self.blink = False
-        self.blink_timer = random.randint(100, 250)
-        # jump state
+        self.facing_right = True
         self.jump_vy = 0.0
         self.ground_y = self.y
+
+        self._configure_window()
+        self._resize_to_frame()
         self._pick_state()
+
+        self.tick_timer = QTimer(self)
+        self.tick_timer.timeout.connect(self.tick)
+        self.tick_timer.start(round(1000 / FPS))
+
+    def _configure_window(self):
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+    def _screen_rect(self):
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return QRect(0, 0, 1440, 900)
+        return screen.availableGeometry()
+
+    def _resize_to_frame(self):
+        max_width = max(frame.width() for frame in self.frames)
+        max_height = max(frame.height() for frame in self.frames)
+        self.setFixedSize(max_width, max_height)
 
     def _pick_state(self):
         r = random.random()
         if r < 0.45:
             self.state = State.WALK
-            spd = random.uniform(0.8, 1.8)
+            speed = random.uniform(0.8, 1.8)
             angle = random.uniform(-0.25, 0.25)
-            d = 1 if random.random() > 0.5 else -1
-            self.vx = d * spd * math.cos(angle)
-            self.vy = spd * math.sin(angle)
+            direction = 1 if random.random() > 0.5 else -1
+            self.vx = direction * speed * math.cos(angle)
+            self.vy = speed * math.sin(angle)
             self.state_timer = random.randint(90, 300)
         elif r < 0.65:
             self.state = State.IDLE
@@ -125,9 +132,9 @@ class Pet:
             self.state_timer = random.randint(60, 180)
         elif r < 0.82:
             self.state = State.RUN
-            spd = random.uniform(3.0, 5.5)
-            d = 1 if random.random() > 0.5 else -1
-            self.vx = d * spd
+            speed = random.uniform(3.0, 5.5)
+            direction = 1 if random.random() > 0.5 else -1
+            self.vx = direction * speed
             self.vy = random.uniform(-0.4, 0.4)
             self.state_timer = random.randint(45, 120)
         else:
@@ -138,26 +145,22 @@ class Pet:
             self.vy = 0.0
             self.state_timer = 600
 
-    def update(self):
-        self.frame += 1
+    def tick(self):
+        self.frame_ticks += round(1000 / FPS)
+        if self.frame_ticks >= ANIMATION_MS:
+            self.frame_ticks = 0
+            self.frame_index = (self.frame_index + 1) % len(self.frames)
+            self.current_frame = self.frames[self.frame_index]
+
+        self._update_motion()
+        self.move(round(self.x), round(self.y))
+        self.update()
+
+    def _update_motion(self):
         self.state_timer -= 1
 
-        # Blink
-        self.blink_timer -= 1
-        if self.blink_timer <= 0:
-            if self.blink:
-                self.blink = False
-                self.blink_timer = random.randint(120, 280)
-            else:
-                self.blink = True
-                self.blink_timer = 5
-
-        GRAVITY = 0.45
-        W = SPRITE_W * SCALE
-        H = SPRITE_H * SCALE
-
         if self.state == State.JUMP:
-            self.jump_vy += GRAVITY
+            self.jump_vy += 0.45
             self.y += self.jump_vy
             self.x += self.vx
             if self.y >= self.ground_y:
@@ -167,551 +170,61 @@ class Pet:
             self.x += self.vx
             self.y += self.vy
 
-        # Facing
         if self.vx > 0.1:
             self.facing_right = True
         elif self.vx < -0.1:
             self.facing_right = False
 
-        # Bounce off edges
-        if self.x < 0:
-            self.x = 0
+        left = self.screen_rect.left()
+        top = self.screen_rect.top()
+        right = self.screen_rect.right() - self.width()
+        bottom = self.screen_rect.bottom() - self.height()
+
+        if self.x < left:
+            self.x = left
             self.vx = abs(self.vx)
-        elif self.x + W > self.sw:
-            self.x = self.sw - W
+        elif self.x > right:
+            self.x = right
             self.vx = -abs(self.vx)
 
-        if self.y < 0:
-            self.y = 0
+        if self.y < top:
+            self.y = top
             if self.state == State.JUMP:
                 self.jump_vy = abs(self.jump_vy) * 0.4
             else:
                 self.vy = abs(self.vy)
-        elif self.y + H > self.sh:
-            self.y = self.sh - H
+        elif self.y > bottom:
+            self.y = bottom
             if self.state == State.JUMP:
-                self.y = self.sh - H
                 self.jump_vy = 0
             else:
                 self.vy = -abs(self.vy)
 
-        # State transition
         if self.state_timer <= 0:
             self._pick_state()
 
-    def draw(self, screen):
-        # Window is sprite-sized; draw at (0, 0). Window itself is moved to
-        # the pet's screen position each frame via SDL_SetWindowPosition.
-        sprite = make_sprite(self.facing_right, self.frame, self.state, self.blink)
-        screen.blit(sprite, (0, 0))
-
-
-# ---------------------------------------------------------------------------
-# macOS window transparency via Objective-C runtime
-# ---------------------------------------------------------------------------
-
-def _objc_setup():
-    import ctypes, ctypes.util
-    objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
-    objc.objc_getClass.restype   = ctypes.c_void_p
-    objc.objc_getClass.argtypes  = [ctypes.c_char_p]
-    objc.sel_registerName.restype  = ctypes.c_void_p
-    objc.sel_registerName.argtypes = [ctypes.c_char_p]
-    # Leave objc_msgSend without fixed argtypes — we cast per call.
-    return objc
-
-
-def _msg(objc, obj, sel_name, *args, restype=None, argtypes=None):
-    """Call obj_msgSend with a per-call cast so we never mutate shared state.
-
-    By default the third argument (if present) is treated as a pointer (id).
-    Pass `argtypes` to override (e.g. [c_bool] for setOpaque:, [c_long] for setLevel:).
-    """
-    import ctypes
-    sel = objc.sel_registerName(sel_name.encode())
-    if restype is None:
-        restype = ctypes.c_void_p
-
-    if not args:
-        proto = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p)
-        fn = ctypes.cast(objc.objc_msgSend, proto)
-        return fn(obj, sel)
-
-    if argtypes is None:
-        # Default: each extra arg is a pointer
-        argtypes = [ctypes.c_void_p] * len(args)
-
-    proto = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p, *argtypes)
-    fn = ctypes.cast(objc.objc_msgSend, proto)
-    converted = [t(a) if not isinstance(a, ctypes._SimpleCData) else a
-                 for t, a in zip(argtypes, args)]
-    return fn(obj, sel, *converted)
-
-
-def _get_sdl_nswindow(objc):
-    """Extract NSWindow pointer via SDL2's SDL_GetWindowWMInfo."""
-    import ctypes, ctypes.util
-
-    # Extract SDL_Window* from pygame capsule
-    PyCapsule_GetPointer = ctypes.pythonapi.PyCapsule_GetPointer
-    PyCapsule_GetPointer.restype  = ctypes.c_void_p
-    PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
-    wm = pygame.display.get_wm_info()
-    sdl_win = PyCapsule_GetPointer(wm['window'], b'window')
-    if not sdl_win:
-        return None
-
-    # SDL_SysWMinfo on macOS (SDL 2.x):
-    # struct: version (3 bytes + 1 pad) + subsystem (Uint32) + union { cocoa { NSWindow* } ... }
-    # Total offset to NSWindow pointer: 8 bytes (version+pad+subsystem) on 64-bit
-    class SDL_version(ctypes.Structure):
-        _fields_ = [('major', ctypes.c_uint8),
-                    ('minor', ctypes.c_uint8),
-                    ('patch', ctypes.c_uint8)]
-
-    class SDL_SysWMinfo_cocoa(ctypes.Structure):
-        _fields_ = [('window', ctypes.c_void_p)]
-
-    class SDL_SysWMinfo(ctypes.Structure):
-        _fields_ = [('version',   SDL_version),
-                    ('_pad',      ctypes.c_uint8),
-                    ('subsystem', ctypes.c_uint32),
-                    ('window',    SDL_SysWMinfo_cocoa)]
-
-    sdl2_path = ctypes.util.find_library('SDL2')
-    if not sdl2_path:
-        # pygame ships its own SDL2
-        import pygame as _pg
-        pkg_dir = os.path.dirname(_pg.__file__)
-        # Common location inside pygame package
-        candidates = [
-            os.path.join(pkg_dir, 'libSDL2-2.0.0.dylib'),
-            os.path.join(pkg_dir, '.dylibs', 'libSDL2-2.0.0.dylib'),
-        ]
-        import glob
-        for pat in [os.path.join(pkg_dir, '**', '*SDL2*.dylib')]:
-            found = glob.glob(pat, recursive=True)
-            if found:
-                sdl2_path = found[0]
-                break
-    if not sdl2_path:
-        return None
-
-    sdl2 = ctypes.cdll.LoadLibrary(sdl2_path)
-    sdl2.SDL_GetWindowWMInfo.restype  = ctypes.c_int
-    sdl2.SDL_GetWindowWMInfo.argtypes = [ctypes.c_void_p,
-                                          ctypes.POINTER(SDL_SysWMinfo)]
-
-    info = SDL_SysWMinfo()
-    # Fill version via SDL_VERSION macro equivalent
-    info.version.major = 2
-    info.version.minor = 0
-    info.version.patch = 0
-    ret = sdl2.SDL_GetWindowWMInfo(ctypes.c_void_p(sdl_win), ctypes.byref(info))
-    if ret == 0:
-        return None
-    return info.window.window  # NSWindow*
-
-
-# Globals so the main loop can re-assert window state each frame.
-_MAC_OBJC = None
-_MAC_WINDOW = None
-_SDL2 = None
-_SDL_WINDOW = None  # SDL_Window* as an integer
-_PRIMARY_HEIGHT = 0  # primary display height in points, set in main()
-_OBJC_IMPL_REFS = []  # keep ctypes IMP callbacks alive forever
-
-# Core Graphics — we render to a CALayer ourselves instead of letting
-# SDL2 present the framebuffer (which strips alpha).
-_CG = None
-_CG_COLORSPACE = None
-_LAST_LAYER_BUFFER = None  # pin the ctypes buffer until next frame swaps it
-_kCGImageAlphaPremultipliedFirst = 2
-_kCGBitmapByteOrder32Little = 2 << 12
-
-
-def _load_sdl2():
-    """Locate and load the SDL2 dylib pygame is using."""
-    import ctypes, ctypes.util, glob
-    path = ctypes.util.find_library('SDL2')
-    if not path:
-        import pygame as _pg
-        pkg_dir = os.path.dirname(_pg.__file__)
-        for found in glob.glob(os.path.join(pkg_dir, '**', '*SDL2*.dylib'),
-                               recursive=True):
-            path = found
-            break
-    if not path:
-        return None
-    sdl2 = ctypes.cdll.LoadLibrary(path)
-    sdl2.SDL_SetWindowPosition.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
-    sdl2.SDL_SetWindowPosition.restype  = None
-    return sdl2
-
-
-def _get_sdl_window_ptr():
-    """Extract SDL_Window* (as int) from pygame's wm_info capsule."""
-    import ctypes
-    PyCapsule_GetPointer = ctypes.pythonapi.PyCapsule_GetPointer
-    PyCapsule_GetPointer.restype  = ctypes.c_void_p
-    PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
-    wm = pygame.display.get_wm_info()
-    return PyCapsule_GetPointer(wm['window'], b'window')
-
-
-def move_window(x, y):
-    """Move pet window to top-left screen coords (x, y).
-
-    AppKit windows use a bottom-left origin so we flip y against the primary
-    display height. Goes via NSWindow.setFrameOrigin: because
-    SDL_SetWindowPosition becomes a no-op once we tweak window level. An
-    NSPoint (struct of 2 CGFloats) is ABI-compatible with two consecutive
-    c_doubles on both x86_64 SysV and AArch64, so we send two doubles."""
-    import ctypes
-    if _MAC_OBJC is None or _MAC_WINDOW is None:
-        return
-    flipped_y = _PRIMARY_HEIGHT - y - SPRITE_H * SCALE
-    sel = _MAC_OBJC.sel_registerName(b'setFrameOrigin:')
-    proto = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
-                              ctypes.c_double, ctypes.c_double)
-    fn = ctypes.cast(_MAC_OBJC.objc_msgSend, proto)
-    fn(_MAC_WINDOW, sel,
-       ctypes.c_double(float(x)), ctypes.c_double(float(flipped_y)))
-
-
-def _swizzle_view_isopaque_no(objc, view):
-    """Force `view`'s isOpaque to return NO via runtime subclassing.
-
-    NSView has no setOpaque: setter — isOpaque is a method returning YES by
-    default. While layer-backed (wantsLayer=YES), Cocoa's drawing pipeline
-    only preserves per-pixel alpha if the view's isOpaque returns NO. We
-    create a one-off subclass of the view's current class that overrides
-    isOpaque, then isa-swizzle the live instance into it. SDL2's drawRect:
-    implementation is inherited unchanged."""
-    import ctypes
-
-    objc.object_getClass.restype  = ctypes.c_void_p
-    objc.object_getClass.argtypes = [ctypes.c_void_p]
-    objc.class_getName.restype    = ctypes.c_char_p
-    objc.class_getName.argtypes   = [ctypes.c_void_p]
-    objc.objc_allocateClassPair.restype  = ctypes.c_void_p
-    objc.objc_allocateClassPair.argtypes = [ctypes.c_void_p,
-                                            ctypes.c_char_p,
-                                            ctypes.c_size_t]
-    objc.objc_registerClassPair.argtypes = [ctypes.c_void_p]
-    objc.class_addMethod.restype  = ctypes.c_bool
-    objc.class_addMethod.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
-                                     ctypes.c_void_p, ctypes.c_char_p]
-    objc.object_setClass.restype  = ctypes.c_void_p
-    objc.object_setClass.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    objc.objc_getClass.restype    = ctypes.c_void_p
-    objc.objc_getClass.argtypes   = [ctypes.c_char_p]
-
-    current_cls = objc.object_getClass(view)
-    if not current_cls:
-        return
-    base_name = objc.class_getName(current_cls).decode()
-    new_name  = ('PetTransparent_' + base_name).encode()
-
-    new_cls = objc.objc_getClass(new_name)  # already registered?
-    if not new_cls:
-        new_cls = objc.objc_allocateClassPair(current_cls, new_name, 0)
-        if not new_cls:
-            return
-
-        IMPTYPE = ctypes.CFUNCTYPE(ctypes.c_bool,
-                                   ctypes.c_void_p, ctypes.c_void_p)
-        @IMPTYPE
-        def _is_opaque(_self, _cmd):
-            return False
-        _OBJC_IMPL_REFS.append(_is_opaque)  # prevent GC
-
-        sel = objc.sel_registerName(b'isOpaque')
-        objc.class_addMethod(new_cls, sel,
-                             ctypes.cast(_is_opaque, ctypes.c_void_p),
-                             b'B@:')
-        objc.objc_registerClassPair(new_cls)
-
-    objc.object_setClass(view, new_cls)
-    print(f"Swizzled contentView: {base_name} -> {new_name.decode()}")
-
-
-def configure_macos_window():
-    global _MAC_OBJC, _MAC_WINDOW
-    import ctypes
-    try:
-        objc = _objc_setup()
-
-        window = _get_sdl_nswindow(objc)
-        if not window:
-            # Fallback: last window in NSApp.windows
-            NSApp = _msg(objc, objc.objc_getClass(b'NSApplication'),
-                         'sharedApplication')
-            windows = _msg(objc, NSApp, 'windows')
-            count = _msg(objc, windows, 'count', restype=ctypes.c_ulong)
-            if count and count > 0:
-                window = _msg(objc, windows, 'objectAtIndex:', count - 1,
-                              argtypes=[ctypes.c_ulong])
-
-        if not window:
-            print("Warning: no NSWindow found — transparency not applied.")
-            return
-
-        # Float across all Spaces + sit above full-screen apps.
-        # Do NOT include NSWindowCollectionBehaviorStationary — it freezes
-        # the window's position so setFrameOrigin: becomes a no-op.
-        #   NSWindowCollectionBehaviorCanJoinAllSpaces    = 1 << 0  = 1
-        #   NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8  = 256
-        behavior = 1 | 256
-        _msg(objc, window, 'setCollectionBehavior:', behavior,
-             argtypes=[ctypes.c_ulong])
-
-        # Always on top — NSStatusWindowLevel = 25 sits above normal app
-        # windows but below the system menu bar, so the menu stays usable.
-        _msg(objc, window, 'setLevel:', 25, argtypes=[ctypes.c_long])
-
-        # Transparent background  (do this AFTER level/behavior changes)
-        NSColor   = objc.objc_getClass(b'NSColor')
-        clear_col = _msg(objc, NSColor, 'clearColor')
-        _msg(objc, window, 'setOpaque:', False, argtypes=[ctypes.c_bool])
-        _msg(objc, window, 'setBackgroundColor:', clear_col)
-        _msg(objc, window, 'setHasShadow:', False, argtypes=[ctypes.c_bool])
-
-        # Mark the Metal/CA layer non-opaque so per-pixel alpha reaches
-        # the compositor — without this, SDL2's Metal layer renders as
-        # opaque and transparent pixels show as black.
-        content_view = _msg(objc, window, 'contentView')
-        if content_view:
-            _swizzle_view_isopaque_no(objc, content_view)
-            _msg(objc, content_view, 'setWantsLayer:', True,
-                 argtypes=[ctypes.c_bool])
-            layer = _msg(objc, content_view, 'layer')
-            if layer:
-                _msg(objc, layer, 'setOpaque:', False,
-                     argtypes=[ctypes.c_bool])
-                clear_cg = _msg(objc, clear_col, 'CGColor')
-                if clear_cg:
-                    _msg(objc, layer, 'setBackgroundColor:', clear_cg)
-                # Crisp pixels when CA upscales on retina.
-                NSString = objc.objc_getClass(b'NSString')
-                nearest = _msg(objc, NSString,
-                               'stringWithUTF8String:', b'nearest',
-                               argtypes=[ctypes.c_char_p])
-                if nearest:
-                    _msg(objc, layer, 'setMagnificationFilter:', nearest)
-                    _msg(objc, layer, 'setMinificationFilter:', nearest)
-                # Diagnostic: what kind of layer is SDL2 giving us?
-                cls = _msg(objc, layer, 'class')
-                if cls:
-                    name_sel = objc.sel_registerName(b'description')
-                    proto = ctypes.CFUNCTYPE(ctypes.c_void_p,
-                                             ctypes.c_void_p,
-                                             ctypes.c_void_p)
-                    fn = ctypes.cast(objc.objc_msgSend, proto)
-                    ns_str = fn(cls, name_sel)
-                    if ns_str:
-                        utf8_sel = objc.sel_registerName(b'UTF8String')
-                        utf8_proto = ctypes.CFUNCTYPE(ctypes.c_char_p,
-                                                     ctypes.c_void_p,
-                                                     ctypes.c_void_p)
-                        utf8_fn = ctypes.cast(objc.objc_msgSend, utf8_proto)
-                        s = utf8_fn(ns_str, utf8_sel)
-                        if s:
-                            print(f"contentView.layer class = {s.decode()}")
-
-        # Click-through (mouse events pass to the app below)
-        _msg(objc, window, 'setIgnoresMouseEvents:', True,
-             argtypes=[ctypes.c_bool])
-
-        _MAC_OBJC   = objc
-        _MAC_WINDOW = window
-
-        print("macOS overlay configured: transparent, click-through, always-on-top.")
-    except Exception as e:
-        print(f"macOS window config error: {e}")
-
-
-def reassert_window_level():
-    """Re-apply window level + transparency. Called periodically to defeat
-    any AppKit/SDL resets that push us behind apps or make us opaque."""
-    import ctypes
-    if _MAC_OBJC is None or _MAC_WINDOW is None:
-        return
-    try:
-        _msg(_MAC_OBJC, _MAC_WINDOW, 'setLevel:', 25, argtypes=[ctypes.c_long])
-        _msg(_MAC_OBJC, _MAC_WINDOW, 'setOpaque:', False,
-             argtypes=[ctypes.c_bool])
-        NSColor   = _MAC_OBJC.objc_getClass(b'NSColor')
-        clear_col = _msg(_MAC_OBJC, NSColor, 'clearColor')
-        _msg(_MAC_OBJC, _MAC_WINDOW, 'setBackgroundColor:', clear_col)
-        content_view = _msg(_MAC_OBJC, _MAC_WINDOW, 'contentView')
-        if content_view:
-            layer = _msg(_MAC_OBJC, content_view, 'layer')
-            if layer:
-                _msg(_MAC_OBJC, layer, 'setOpaque:', False,
-                     argtypes=[ctypes.c_bool])
-    except Exception:
-        pass
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-
-def _load_cg():
-    import ctypes, ctypes.util
-    cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library('CoreGraphics'))
-    cg.CGColorSpaceCreateDeviceRGB.restype = ctypes.c_void_p
-    cg.CGColorSpaceCreateDeviceRGB.argtypes = []
-    cg.CGColorSpaceRelease.argtypes = [ctypes.c_void_p]
-    cg.CGDataProviderCreateWithData.restype  = ctypes.c_void_p
-    cg.CGDataProviderCreateWithData.argtypes = [
-        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
-    ]
-    cg.CGDataProviderRelease.argtypes = [ctypes.c_void_p]
-    cg.CGImageCreate.restype  = ctypes.c_void_p
-    cg.CGImageCreate.argtypes = [
-        ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
-        ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
-        ctypes.c_void_p, ctypes.c_bool, ctypes.c_int,
-    ]
-    cg.CGImageRelease.argtypes = [ctypes.c_void_p]
-    return cg
-
-
-def push_surface_to_layer(surf):
-    """Build a CGImage from `surf` and set contentView.layer.contents.
-
-    SDL2's Cocoa_UpdateWindowFramebuffer creates its CGImage with
-    kCGImageAlphaNoneSkipFirst — alpha is discarded before the
-    compositor ever sees it, which is why the window renders opaque
-    black under transparent pixels. We bypass that path entirely:
-    pygame draws into an off-screen SRCALPHA surface, we wrap its
-    bytes in a CGImage with kCGImageAlphaPremultipliedFirst, and hand
-    it to the CALayer directly."""
-    global _LAST_LAYER_BUFFER, _CG, _CG_COLORSPACE
-    import ctypes
-    if _MAC_OBJC is None or _MAC_WINDOW is None:
-        return
-    if _CG is None:
-        _CG = _load_cg()
-        _CG_COLORSPACE = _CG.CGColorSpaceCreateDeviceRGB()
-
-    content_view = _msg(_MAC_OBJC, _MAC_WINDOW, 'contentView')
-    if not content_view:
-        return
-    layer = _msg(_MAC_OBJC, content_view, 'layer')
-    if not layer:
-        return
-
-    # Core Graphics is happiest with the native macOS layer format:
-    # BGRA bytes plus kCGImageAlphaPremultipliedFirst/32Little. Supplying
-    # straight RGBA here can make transparent pixels composite as black on
-    # some SDL/Cocoa paths.
-    if hasattr(surf, 'premul_alpha'):
-        surf = surf.premul_alpha()
-    pixels = pygame.image.tobytes(surf, 'BGRA')
-    w, h = surf.get_width(), surf.get_height()
-    buf = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
-
-    provider = _CG.CGDataProviderCreateWithData(None, buf, len(pixels), None)
-    if not provider:
-        return
-
-    cgimage = _CG.CGImageCreate(
-        w, h, 8, 32, w * 4, _CG_COLORSPACE,
-        _kCGImageAlphaPremultipliedFirst | _kCGBitmapByteOrder32Little,
-        provider, None, False, 0
-    )
-    if cgimage:
-        _msg(_MAC_OBJC, layer, 'setContents:', cgimage)
-        _CG.CGImageRelease(cgimage)
-    _CG.CGDataProviderRelease(provider)
-
-    # Pin until next frame's setContents: replaces the layer's image —
-    # CGDataProviderCreateWithData stores a raw pointer with no copy.
-    _LAST_LAYER_BUFFER = buf
-
-
-def _screen_bounds():
-    """Return (origin_x, origin_y, width, height) for the primary display
-    in macOS global screen coordinates."""
-    import ctypes, ctypes.util
-    cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library('CoreGraphics'))
-
-    class CGRect(ctypes.Structure):
-        _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double),
-                    ('w', ctypes.c_double), ('h', ctypes.c_double)]
-
-    cg.CGMainDisplayID.restype  = ctypes.c_uint32
-    cg.CGDisplayBounds.restype  = CGRect
-    cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
-    r = cg.CGDisplayBounds(cg.CGMainDisplayID())
-    return int(r.x), int(r.y), int(r.w), int(r.h)
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+
+        frame = self.current_frame
+        if not self.facing_right:
+            frame = frame.transformed(QTransform().scale(-1, 1))
+
+        x = (self.width() - frame.width()) // 2
+        y = (self.height() - frame.height()) // 2
+        painter.drawPixmap(QPoint(x, y), frame)
 
 
 def main():
-    global _SDL2, _SDL_WINDOW, _PRIMARY_HEIGHT
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(True)
 
-    pygame.init()
+    pet = PetWindow()
+    pet.show()
 
-    ox, oy, SW, SH = _screen_bounds()
-    _PRIMARY_HEIGHT = SH  # needed for AppKit y-flip in move_window
-    W = SPRITE_W * SCALE
-    H = SPRITE_H * SCALE
-
-    # Position the window initially at the center of the primary display.
-    os.environ['SDL_VIDEO_WINDOW_POS'] = f'{ox + SW // 2},{oy + SH // 2}'
-
-    screen = pygame.display.set_mode((W, H), pygame.NOFRAME | pygame.SRCALPHA)
-    pygame.display.set_caption("Desktop Pet")
-    print(f"display flags = 0x{screen.get_flags():x} "
-          f"(SRCALPHA={bool(screen.get_flags() & pygame.SRCALPHA)}) "
-          f"bitsize={screen.get_bitsize()} "
-          f"masks={screen.get_masks()}")
-
-    pygame.event.pump()
-    time.sleep(0.05)
-
-    _SDL2 = _load_sdl2()
-    _SDL_WINDOW = _get_sdl_window_ptr()
-
-    configure_macos_window()
-
-    clock = pygame.time.Clock()
-    # Pet bookkeeping uses local (0..SW, 0..SH) coordinates; we translate to
-    # global screen coords when moving the window.
-    pet = Pet(SW, SH)
-
-    # Off-screen canvas. We never call pygame.display.flip() because SDL2's
-    # framebuffer path strips alpha (see push_surface_to_layer). Instead we
-    # draw here and push pixels straight to the window's CALayer.
-    canvas = pygame.Surface((W, H), pygame.SRCALPHA)
-
-    frame_count = 0
-    while True:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit(); sys.exit()
-            elif event.type == pygame.KEYDOWN:
-                if event.key in (pygame.K_ESCAPE, pygame.K_q):
-                    pygame.quit(); sys.exit()
-
-        pet.update()
-
-        canvas.fill(CLEAR)
-        pet.draw(canvas)
-        push_surface_to_layer(canvas)
-
-        # Move the window to follow the pet (translate to global coords)
-        move_window(ox + int(pet.x), oy + int(pet.y))
-
-        frame_count += 1
-        if frame_count % FPS == 0:
-            reassert_window_level()
-
-        clock.tick(FPS)
+    sys.exit(app.exec())
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
