@@ -43,6 +43,7 @@ NSEVENT_LEFT_MOUSE_DRAGGED = 6
 # Increase these to make the pet jump more often or jump higher.
 RANDOM_JUMP_STATE_CHANCE = 0.03      # Chance that a new random state is JUMP.
 WINDOW_JUMP_CHANCE = 0.002           # Per-frame chance to jump to another window.
+PLATFORM_DROP_CHANCE = 0.002        # Per-frame chance to drop through current ledge.
 NORMAL_JUMP_POWER_MIN = 5.5          # Smaller hop when jumping without a target.
 NORMAL_JUMP_POWER_MAX = 6.0
 TARGET_JUMP_POWER_MIN = 8.0          # Minimum power for window-to-window jumps.
@@ -636,7 +637,8 @@ class Pet:
         self._update_face()
 
         if not self.airborne and self.state != State.JUMP:
-            self._maybe_jump_to_window(platforms)
+            if not self._maybe_drop_through_platform():
+                self._maybe_jump_to_window(platforms)
 
         if self.airborne or self.state == State.JUMP:
             self.jump_vy += GRAVITY
@@ -743,6 +745,28 @@ class Pet:
         self.state = State.JUMP
         self.jump_vy = 0.0
         self.jump_cooldown = 30
+
+    def _maybe_drop_through_platform(self):
+        if self.jump_cooldown > 0:
+            return False
+        if self.state not in (State.IDLE, State.WALK):
+            return False
+        if not self.platform or self.platform["name"] == GROUND_PLATFORM_NAME:
+            return False
+        if random.random() > PLATFORM_DROP_CHANCE:
+            return False
+
+        direction = 1 if self.facing_right else -1
+        if abs(self.vx) < 0.2:
+            self.vx = direction * random.uniform(0.25, 0.8)
+        self.y += 3
+        self.airborne = True
+        self.platform = None
+        self.jump_target = None
+        self.state = State.JUMP
+        self.jump_vy = 1.2
+        self.jump_cooldown = 45
+        return True
 
     def _matching_platform(self, platforms, platform):
         if not platform:
