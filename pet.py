@@ -660,6 +660,19 @@ class Pet:
         self.y = self.platform["y"] - WINDOW_H
         self.airborne = False
 
+    def sync_platforms(self, platforms):
+        current = self._matching_platform(platforms, self.platform)
+        if current and self._feet_inside_platform(current):
+            self.platform = current
+            self.y = current["y"] - WINDOW_H
+            return
+
+        self.platform = None
+        self.airborne = True
+        self.state = State.JUMP
+        self.jump_target = None
+        self.jump_vy = max(0.0, self.jump_vy)
+
     def _matching_platform(self, platforms, platform):
         if not platform:
             return None
@@ -851,7 +864,7 @@ def main():
         if now - last_window_scan > 0.75:
             platforms = window_tracker.platforms()
             if not pet.airborne:
-                pet.place_on_best_platform(platforms)
+                pet.sync_platforms(platforms)
             last_window_scan = now
 
         pet.update(platforms)
