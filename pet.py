@@ -57,8 +57,8 @@ def draw_pet_pixels(px, facing_right, anim_frame, state, blink):
     # Eyes (2 pixels on upper body row y=2)
     if not blink:
         if facing_right:
-            px.set_at((5, 2), E)
             px.set_at((6, 2), E)
+            px.set_at((8, 2), E)
         else:
             px.set_at((2, 2), E)
             px.set_at((3, 2), E)
@@ -195,40 +195,41 @@ class Pet:
 # ---------------------------------------------------------------------------
 
 def _objc_setup():
-    """Return (objc_lib, msg_fn) with restype set to void_p."""
     import ctypes, ctypes.util
     objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library('objc'))
     objc.objc_getClass.restype   = ctypes.c_void_p
     objc.objc_getClass.argtypes  = [ctypes.c_char_p]
     objc.sel_registerName.restype  = ctypes.c_void_p
     objc.sel_registerName.argtypes = [ctypes.c_char_p]
-    objc.objc_msgSend.restype  = ctypes.c_void_p
-    objc.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    # Leave objc_msgSend without fixed argtypes — we cast per call.
     return objc
 
 
-def _msg(objc, obj, sel_name, *args):
+def _msg(objc, obj, sel_name, *args, restype=None, argtypes=None):
+    """Call obj_msgSend with a per-call cast so we never mutate shared state.
+
+    By default the third argument (if present) is treated as a pointer (id).
+    Pass `argtypes` to override (e.g. [c_bool] for setOpaque:, [c_long] for setLevel:).
+    """
     import ctypes
     sel = objc.sel_registerName(sel_name.encode())
-    fn = objc.objc_msgSend
+    if restype is None:
+        restype = ctypes.c_void_p
+
     if not args:
-        fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        fn.restype  = ctypes.c_void_p
+        proto = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p)
+        fn = ctypes.cast(objc.objc_msgSend, proto)
         return fn(obj, sel)
-    elif len(args) == 1 and isinstance(args[0], bool):
-        # bool message
-        proto = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool)
-        return proto(fn)(obj, sel, args[0])
-    elif len(args) == 1 and isinstance(args[0], int):
-        import ctypes
-        proto = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long)
-        return proto(fn)(obj, sel, ctypes.c_long(args[0]))
-    elif len(args) == 1:
-        fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
-        fn.restype  = ctypes.c_void_p
-        return fn(obj, sel, args[0])
-    else:
-        raise ValueError(f"Unhandled arg types: {args}")
+
+    if argtypes is None:
+        # Default: each extra arg is a pointer
+        argtypes = [ctypes.c_void_p] * len(args)
+
+    proto = ctypes.CFUNCTYPE(restype, ctypes.c_void_p, ctypes.c_void_p, *argtypes)
+    fn = ctypes.cast(objc.objc_msgSend, proto)
+    converted = [t(a) if not isinstance(a, ctypes._SimpleCData) else a
+                 for t, a in zip(argtypes, args)]
+    return fn(obj, sel, *converted)
 
 
 def _get_sdl_nswindow(objc):
@@ -296,30 +297,27 @@ def _get_sdl_nswindow(objc):
     return info.window.window  # NSWindow*
 
 
+# Globals so the main loop can re-assert window state each frame.
+_MAC_OBJC = None
+_MAC_WINDOW = None
+
+
 def configure_macos_window():
+    global _MAC_OBJC, _MAC_WINDOW
+    import ctypes
     try:
         objc = _objc_setup()
 
         window = _get_sdl_nswindow(objc)
-
         if not window:
-            # Fallback: grab last window from NSApp.windows array
-            import ctypes
-            NSApp = _msg(objc, objc.objc_getClass(b'NSApplication'), 'sharedApplication')
+            # Fallback: last window in NSApp.windows
+            NSApp = _msg(objc, objc.objc_getClass(b'NSApplication'),
+                         'sharedApplication')
             windows = _msg(objc, NSApp, 'windows')
-            fn = objc.objc_msgSend
-            fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-            fn.restype = ctypes.c_ulong
-            count = fn(windows, objc.sel_registerName(b'count'))
-            fn.restype = ctypes.c_void_p
-            if count > 0:
-                get_at = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p,
-                                           ctypes.c_void_p, ctypes.c_ulong)
-                window = get_at(objc.objc_msgSend)(
-                    windows,
-                    objc.sel_registerName(b'objectAtIndex:'),
-                    ctypes.c_ulong(count - 1)
-                )
+            count = _msg(objc, windows, 'count', restype=ctypes.c_ulong)
+            if count and count > 0:
+                window = _msg(objc, windows, 'objectAtIndex:', count - 1,
+                              argtypes=[ctypes.c_ulong])
 
         if not window:
             print("Warning: no NSWindow found — transparency not applied.")
@@ -329,17 +327,54 @@ def configure_macos_window():
         NSColor   = objc.objc_getClass(b'NSColor')
         clear_col = _msg(objc, NSColor, 'clearColor')
         _msg(objc, window, 'setBackgroundColor:', clear_col)
-        _msg(objc, window, 'setOpaque:', False)
+        _msg(objc, window, 'setOpaque:', False, argtypes=[ctypes.c_bool])
 
         # Click-through
-        _msg(objc, window, 'setIgnoresMouseEvents:', True)
+        _msg(objc, window, 'setIgnoresMouseEvents:', True,
+             argtypes=[ctypes.c_bool])
 
-        # Always on top
-        _msg(objc, window, 'setLevel:', 1000)
+        # Always on top — NSScreenSaverWindowLevel = 1000
+        # (kCGMaximumWindowLevel = 2147483630 if you want above OS chrome too)
+        _msg(objc, window, 'setLevel:', 1000, argtypes=[ctypes.c_long])
 
-        print("macOS transparency + click-through applied.")
+        # Float across all Spaces + sit above full-screen apps.
+        #   NSWindowCollectionBehaviorCanJoinAllSpaces      = 1 << 0  = 1
+        #   NSWindowCollectionBehaviorStationary            = 1 << 4  = 16
+        #   NSWindowCollectionBehaviorIgnoresCycle          = 1 << 6  = 64
+        #   NSWindowCollectionBehaviorFullScreenAuxiliary   = 1 << 8  = 256
+        behavior = 1 | 16 | 64 | 256
+        _msg(objc, window, 'setCollectionBehavior:', behavior,
+             argtypes=[ctypes.c_ulong])
+
+        # Hide from Dock / Cmd-Tab so it really feels like an overlay.
+        # NSApplicationActivationPolicyAccessory = 1
+        NSApp = _msg(objc, objc.objc_getClass(b'NSApplication'),
+                     'sharedApplication')
+        _msg(objc, NSApp, 'setActivationPolicy:', 1,
+             argtypes=[ctypes.c_long], restype=ctypes.c_bool)
+
+        # Make sure the window is actually ordered to the front.
+        _msg(objc, window, 'orderFrontRegardless')
+
+        _MAC_OBJC   = objc
+        _MAC_WINDOW = window
+
+        print("macOS overlay configured: transparent, click-through, always-on-top.")
     except Exception as e:
         print(f"macOS window config error: {e}")
+
+
+def reassert_window_level():
+    """Re-apply window level + orderFront. Called every ~1s from the main loop
+    to defeat SDL/AppKit resets when the app loses focus."""
+    import ctypes
+    if _MAC_OBJC is None or _MAC_WINDOW is None:
+        return
+    try:
+        _msg(_MAC_OBJC, _MAC_WINDOW, 'setLevel:', 1000, argtypes=[ctypes.c_long])
+        _msg(_MAC_OBJC, _MAC_WINDOW, 'orderFrontRegardless')
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +400,7 @@ def main():
     clock = pygame.time.Clock()
     pet = Pet(SW, SH)
 
+    frame_count = 0
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -377,6 +413,12 @@ def main():
         screen.fill(CLEAR)
         pet.draw(screen)
         pygame.display.flip()
+
+        # Re-assert window level every second so we stay on top
+        frame_count += 1
+        if frame_count % FPS == 0:
+            reassert_window_level()
+
         clock.tick(FPS)
 
 
