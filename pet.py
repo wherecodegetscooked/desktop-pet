@@ -416,9 +416,33 @@ def configure_macos_window():
         # opaque and transparent pixels show as black.
         content_view = _msg(objc, window, 'contentView')
         if content_view:
+            _msg(objc, content_view, 'setWantsLayer:', True,
+                 argtypes=[ctypes.c_bool])
             layer = _msg(objc, content_view, 'layer')
             if layer:
-                _msg(objc, layer, 'setOpaque:', False, argtypes=[ctypes.c_bool])
+                _msg(objc, layer, 'setOpaque:', False,
+                     argtypes=[ctypes.c_bool])
+                clear_cg = _msg(objc, clear_col, 'CGColor')
+                if clear_cg:
+                    _msg(objc, layer, 'setBackgroundColor:', clear_cg)
+                # Diagnostic: what kind of layer is SDL2 giving us?
+                cls = _msg(objc, layer, 'class')
+                if cls:
+                    name_sel = objc.sel_registerName(b'description')
+                    proto = ctypes.CFUNCTYPE(ctypes.c_void_p,
+                                             ctypes.c_void_p,
+                                             ctypes.c_void_p)
+                    fn = ctypes.cast(objc.objc_msgSend, proto)
+                    ns_str = fn(cls, name_sel)
+                    if ns_str:
+                        utf8_sel = objc.sel_registerName(b'UTF8String')
+                        utf8_proto = ctypes.CFUNCTYPE(ctypes.c_char_p,
+                                                     ctypes.c_void_p,
+                                                     ctypes.c_void_p)
+                        utf8_fn = ctypes.cast(objc.objc_msgSend, utf8_proto)
+                        s = utf8_fn(ns_str, utf8_sel)
+                        if s:
+                            print(f"contentView.layer class = {s.decode()}")
 
         # Click-through (mouse events pass to the app below)
         _msg(objc, window, 'setIgnoresMouseEvents:', True,
@@ -491,6 +515,10 @@ def main():
 
     screen = pygame.display.set_mode((W, H), pygame.NOFRAME | pygame.SRCALPHA)
     pygame.display.set_caption("Desktop Pet")
+    print(f"display flags = 0x{screen.get_flags():x} "
+          f"(SRCALPHA={bool(screen.get_flags() & pygame.SRCALPHA)}) "
+          f"bitsize={screen.get_bitsize()} "
+          f"masks={screen.get_masks()}")
 
     pygame.event.pump()
     time.sleep(0.05)
