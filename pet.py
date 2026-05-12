@@ -48,9 +48,9 @@ NORMAL_JUMP_POWER_MAX = 6.0
 TARGET_JUMP_POWER_MIN = 7.0          # Minimum power for window-to-window jumps.
 MAX_TARGET_JUMP_POWER = 38.0         # Raise this to reach very high windows.
 TARGET_JUMP_EXTRA_HEIGHT = 72        # Extra arc height above the destination edge.
-MAX_TARGET_JUMP_SPEED_X = 12.5       # Horizontal speed cap for long jumps.
-MAX_TARGET_DISTANCE = 1.0            # Fraction of screen width considered reachable.
-MAX_TARGET_HEIGHT = 1.0              # Fraction of screen height considered reachable.
+MAX_TARGET_JUMP_SPEED_X = 6.0        # Horizontal speed cap for long jumps.
+MAX_TARGET_DISTANCE = 0.3           # Fraction of screen width considered reachable.
+MAX_TARGET_HEIGHT = 1.2              # Fraction of screen height considered reachable.
 
 
 class State:
