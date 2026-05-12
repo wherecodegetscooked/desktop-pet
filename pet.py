@@ -36,6 +36,19 @@ WINDOW_LIST_EXCLUDE_DESKTOP = 16
 GROUND_PLATFORM_NAME = "Desktop"
 GRAVITY = 0.42
 
+# Jump tuning ---------------------------------------------------------------
+# Increase these to make the pet jump more often or jump higher.
+RANDOM_JUMP_STATE_CHANCE = 0.1      # Chance that a new random state is JUMP.
+WINDOW_JUMP_CHANCE = 0.006           # Per-frame chance to jump to another window.
+NORMAL_JUMP_POWER_MIN = 5.5          # Smaller hop when jumping without a target.
+NORMAL_JUMP_POWER_MAX = 6.0
+TARGET_JUMP_POWER_MIN = 7.0          # Minimum power for window-to-window jumps.
+MAX_TARGET_JUMP_POWER = 38.0         # Raise this to reach very high windows.
+TARGET_JUMP_EXTRA_HEIGHT = 72        # Extra arc height above the destination edge.
+MAX_TARGET_JUMP_SPEED_X = 12.5       # Horizontal speed cap for long jumps.
+MAX_TARGET_DISTANCE = 1.0            # Fraction of screen width considered reachable.
+MAX_TARGET_HEIGHT = 1.0              # Fraction of screen height considered reachable.
+
 
 class State:
     IDLE = "IDLE"
@@ -139,6 +152,7 @@ class WindowTracker:
                 "kCGWindowLayer",
                 "kCGWindowAlpha",
                 "kCGWindowOwnerName",
+                "kCGWindowNumber",
                 "X",
                 "Y",
                 "Width",
@@ -149,11 +163,13 @@ class WindowTracker:
     def platforms(self):
         platforms = [
             {
+                "id": "desktop",
                 "x": 0,
                 "y": self.screen_h,
                 "w": self.screen_w,
                 "h": 1,
                 "name": GROUND_PLATFORM_NAME,
+                "edge": "ground",
             }
         ]
 
@@ -172,9 +188,7 @@ class WindowTracker:
                     i,
                     argtypes=[ctypes.c_ulong],
                 )
-                platform = self._platform_from_window(info)
-                if platform:
-                    platforms.append(platform)
+                platforms.extend(self._platforms_from_window(info))
         finally:
             self.cf.CFRelease(array)
 
@@ -184,33 +198,57 @@ class WindowTracker:
     def _dict_value(self, dictionary, key):
         return _msg(self.objc, dictionary, "objectForKey:", self.keys[key])
 
-    def _platform_from_window(self, info):
+    def _platforms_from_window(self, info):
         layer = _nsnumber_int(self.objc, self._dict_value(info, "kCGWindowLayer"))
         alpha = _nsnumber_double(self.objc, self._dict_value(info, "kCGWindowAlpha"))
         if layer != 0 or alpha <= 0.05:
-            return None
+            return []
 
         bounds = self._dict_value(info, "kCGWindowBounds")
         if not bounds:
-            return None
+            return []
 
         x = _nsnumber_double(self.objc, self._dict_value(bounds, "X"))
         y = _nsnumber_double(self.objc, self._dict_value(bounds, "Y"))
         w = _nsnumber_double(self.objc, self._dict_value(bounds, "Width"))
         h = _nsnumber_double(self.objc, self._dict_value(bounds, "Height"))
         if w < WINDOW_W * 1.4 or h < WINDOW_H * 0.9:
-            return None
-        if y < WINDOW_H + 8 or y > self.screen_h - 24:
-            return None
+            return []
 
+        window_id = _nsnumber_int(self.objc, self._dict_value(info, "kCGWindowNumber"))
         owner = _nsstring_text(self.objc, self._dict_value(info, "kCGWindowOwnerName"))
-        return {
-            "x": int(max(0, x)),
-            "y": int(max(0, y)),
-            "w": int(min(w, self.screen_w - max(0, x))),
-            "h": int(h),
-            "name": owner or "Window",
-        }
+        px = int(max(0, x))
+        pw = int(min(w, self.screen_w - px))
+        name = owner or "Window"
+
+        platforms = []
+        top_y = int(max(0, y))
+        bottom_y = int(max(0, y + h))
+        if WINDOW_H + 8 <= top_y <= self.screen_h - 24:
+            platforms.append(
+                {
+                    "id": f"{window_id}:top",
+                    "x": px,
+                    "y": top_y,
+                    "w": pw,
+                    "h": 1,
+                    "name": name,
+                    "edge": "top",
+                }
+            )
+        if WINDOW_H + 8 <= bottom_y <= self.screen_h - 24:
+            platforms.append(
+                {
+                    "id": f"{window_id}:bottom",
+                    "x": px,
+                    "y": bottom_y,
+                    "w": pw,
+                    "h": 1,
+                    "name": name,
+                    "edge": "bottom",
+                }
+            )
+        return platforms
 
 
 class MacOverlay:
@@ -434,6 +472,7 @@ class Pet:
         self.airborne = False
         self.platform = None
         self.jump_target = None
+        self.jump_cooldown = 0
         self.pick_state()
 
     def pick_state(self):
@@ -450,7 +489,7 @@ class Pet:
             self.vx = 0.0
             self.vy = 0.0
             self.state_timer = random.randint(70, 190)
-        elif r < 0.9:
+        elif r < 1.0 - RANDOM_JUMP_STATE_CHANCE:
             self.state = State.RUN
             speed = random.uniform(3.0, 5.6)
             direction = 1 if random.random() > 0.5 else -1
@@ -458,19 +497,37 @@ class Pet:
             self.vy = random.uniform(-0.35, 0.35)
             self.state_timer = random.randint(45, 115)
         else:
-            self.state = State.JUMP
-            self.start_jump()
+            if self.jump_cooldown > 0:
+                self.state = State.WALK
+                self.vx = random.choice([-1, 1]) * random.uniform(0.7, 1.8)
+                self.vy = random.uniform(-0.25, 0.25)
+                self.state_timer = random.randint(80, 180)
+            else:
+                self.state = State.JUMP
+                self.start_jump()
 
     def start_jump(self, target=None):
         self.state = State.JUMP
         self.airborne = True
         self.jump_target = target
-        self.jump_vy = random.uniform(-8.5, -5.5)
+        self.jump_vy = -random.uniform(NORMAL_JUMP_POWER_MIN, NORMAL_JUMP_POWER_MAX)
         if target:
             target_center = target["x"] + target["w"] * 0.5
             pet_center = self.x + WINDOW_W * 0.5
-            self.vx = max(-4.6, min(4.6, (target_center - pet_center) / 58))
-            self.jump_vy = random.uniform(-10.5, -7.2)
+            target_feet_y = target["y"]
+            current_feet_y = self.y + WINDOW_H
+            rise = max(0, current_feet_y - target_feet_y)
+            distance = target_center - pet_center
+            clearance = max(4, min(TARGET_JUMP_EXTRA_HEIGHT, target_feet_y - WINDOW_H - 8))
+            self.jump_vy = -min(
+                MAX_TARGET_JUMP_POWER,
+                max(TARGET_JUMP_POWER_MIN, math.sqrt(2 * GRAVITY * (rise + clearance))),
+            )
+            airtime = max(34, (abs(self.jump_vy) * 2) / GRAVITY)
+            self.vx = max(
+                -MAX_TARGET_JUMP_SPEED_X,
+                min(MAX_TARGET_JUMP_SPEED_X, distance / airtime),
+            )
         elif abs(self.vx) < 0.3:
             self.vx = random.uniform(-2.5, 2.5)
         self.vy = 0.0
@@ -479,6 +536,7 @@ class Pet:
     def update(self, platforms):
         self.frame += 1
         self.state_timer -= 1
+        self.jump_cooldown = max(0, self.jump_cooldown - 1)
         self._update_face()
 
         if not self.airborne and self.state != State.JUMP:
@@ -512,15 +570,12 @@ class Pet:
             self.vx = -abs(self.vx)
             self.facing_right = False
 
-        if self.y < 0:
-            self.y = 0
-            self.vy = abs(self.vy)
-            self.jump_vy = abs(self.jump_vy) * 0.35
-        elif self.y + WINDOW_H > self.screen_h:
+        if self.y + WINDOW_H > self.screen_h:
             self.y = self.screen_h - WINDOW_H
             self.airborne = False
             self.platform = platforms[0] if platforms else None
             if self.state == State.JUMP:
+                self.jump_cooldown = 30
                 self.pick_state()
 
         if self.state_timer <= 0 and not self.airborne:
@@ -542,6 +597,13 @@ class Pet:
             self.look_timer = random.randint(45, 160)
 
     def place_on_best_platform(self, platforms):
+        current = self._matching_platform(platforms, self.platform)
+        if current and self._feet_inside_platform(current):
+            self.platform = current
+            self.y = current["y"] - WINDOW_H
+            self.airborne = False
+            return
+
         below = [
             platform
             for platform in platforms
@@ -552,6 +614,14 @@ class Pet:
         self.platform = min(below, key=lambda item: item["y"], default=platforms[0])
         self.y = self.platform["y"] - WINDOW_H
         self.airborne = False
+
+    def _matching_platform(self, platforms, platform):
+        if not platform:
+            return None
+        for candidate in platforms:
+            if candidate.get("id") == platform.get("id"):
+                return candidate
+        return None
 
     def _feet_x(self):
         return self.x + WINDOW_W * 0.5
@@ -582,28 +652,42 @@ class Pet:
         self.y = platform["y"] - WINDOW_H
         self.airborne = False
         self.jump_target = None
+        self.jump_cooldown = 30
         self.pick_state()
 
     def _maybe_jump_to_window(self, platforms):
+        if self.jump_cooldown > 0:
+            return
         if self.state not in (State.IDLE, State.WALK):
             return
-        if random.random() > 0.006:
+        if random.random() > WINDOW_JUMP_CHANCE:
             return
 
         foot = self._feet_x()
         current_y = self.y + WINDOW_H
         candidates = []
         for platform in platforms:
-            if platform is self.platform or platform["name"] == GROUND_PLATFORM_NAME:
+            if platform.get("id") == (self.platform or {}).get("id"):
+                continue
+            if platform["name"] == GROUND_PLATFORM_NAME:
                 continue
             center = platform["x"] + platform["w"] * 0.5
             distance = abs(center - foot)
             vertical = platform["y"] - current_y
-            if distance < 520 and -260 < vertical < 180:
+            if (
+                distance < self.screen_w * MAX_TARGET_DISTANCE
+                and -self.screen_h * MAX_TARGET_HEIGHT < vertical < 260
+            ):
                 candidates.append(platform)
 
         if candidates:
-            self.start_jump(random.choice(candidates))
+            candidates.sort(
+                key=lambda platform: (
+                    platform["y"],
+                    abs((platform["x"] + platform["w"] * 0.5) - foot),
+                )
+            )
+            self.start_jump(random.choice(candidates[:3]))
 
 
 def px(surface, x, y, color):
