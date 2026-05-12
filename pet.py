@@ -35,6 +35,9 @@ WINDOW_LIST_ON_SCREEN_ONLY = 1
 WINDOW_LIST_EXCLUDE_DESKTOP = 16
 GROUND_PLATFORM_NAME = "Desktop"
 GRAVITY = 0.42
+NSEVENT_LEFT_MOUSE_DOWN = 1
+NSEVENT_LEFT_MOUSE_UP = 2
+NSEVENT_LEFT_MOUSE_DRAGGED = 6
 
 # Jump tuning ---------------------------------------------------------------
 # Increase these to make the pet jump more often or jump higher.
@@ -308,6 +311,10 @@ class MacOverlay:
         self.layer = None
         self.last_buffer = None
         self.level = self.cg.CGWindowLevelForKey(CG_WINDOW_LEVEL_ASSISTIVE_TECH_HIGH)
+        self.dragging = False
+        self.drag_offset = NSPoint(0, 0)
+        self.drag_position = None
+        self.drag_released = False
 
         self._create_window()
 
@@ -380,7 +387,7 @@ class MacOverlay:
         _msg(objc, self.window, "setOpaque:", False, argtypes=[ctypes.c_bool])
         _msg(objc, self.window, "setBackgroundColor:", clear)
         _msg(objc, self.window, "setHasShadow:", False, argtypes=[ctypes.c_bool])
-        _msg(objc, self.window, "setIgnoresMouseEvents:", True, argtypes=[ctypes.c_bool])
+        _msg(objc, self.window, "setIgnoresMouseEvents:", False, argtypes=[ctypes.c_bool])
         _msg(objc, self.window, "setCanHide:", False, argtypes=[ctypes.c_bool])
         _msg(objc, self.window, "setReleasedWhenClosed:", False, argtypes=[ctypes.c_bool])
         _msg(objc, self.window, "setAlphaValue:", 1.0, argtypes=[ctypes.c_double])
@@ -465,6 +472,7 @@ class MacOverlay:
 
     def pump_events(self):
         NSDate = self.objc.objc_getClass(b"NSDate")
+        NSEvent = self.objc.objc_getClass(b"NSEvent")
         NSString = self.objc.objc_getClass(b"NSString")
         distant_past = _msg(self.objc, NSDate, "distantPast")
         mode = _msg(
@@ -492,8 +500,50 @@ class MacOverlay:
                 ],
             )
             if event:
-                _msg(self.objc, self.nsapp, "sendEvent:", event)
+                if not self._handle_mouse_event(event, NSEvent):
+                    _msg(self.objc, self.nsapp, "sendEvent:", event)
         _msg(self.objc, self.nsapp, "updateWindows")
+
+    def _handle_mouse_event(self, event, NSEvent):
+        event_type = _msg(self.objc, event, "type", restype=ctypes.c_ulong)
+        if event_type == NSEVENT_LEFT_MOUSE_DOWN:
+            self.dragging = True
+            self.drag_released = False
+            self.drag_offset = _msg(
+                self.objc,
+                event,
+                "locationInWindow",
+                restype=NSPoint,
+            )
+            self.drag_position = self._drag_top_left(NSEvent)
+            return True
+        if event_type == NSEVENT_LEFT_MOUSE_DRAGGED and self.dragging:
+            self.drag_position = self._drag_top_left(NSEvent)
+            return True
+        if event_type == NSEVENT_LEFT_MOUSE_UP and self.dragging:
+            self.drag_position = self._drag_top_left(NSEvent)
+            self.dragging = False
+            self.drag_released = True
+            return True
+        return False
+
+    def _drag_top_left(self, NSEvent):
+        mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)
+        _, _, screen_w, screen_h = self.screen_bounds()
+        x = mouse.x - self.drag_offset.x
+        y = screen_h - (mouse.y - self.drag_offset.y) - self.height
+        x = max(0, min(screen_w - self.width, x))
+        y = max(-self.height * 2, min(screen_h - self.height, y))
+        return x, y
+
+    def consume_drag_state(self):
+        state = {
+            "dragging": self.dragging,
+            "position": self.drag_position,
+            "released": self.drag_released,
+        }
+        self.drag_released = False
+        return state
 
 
 class Pet:
@@ -672,6 +722,26 @@ class Pet:
         self.state = State.JUMP
         self.jump_target = None
         self.jump_vy = max(0.0, self.jump_vy)
+
+    def drag_to(self, x, y):
+        self.x = float(x)
+        self.y = float(y)
+        self.vx = 0.0
+        self.vy = 0.0
+        self.jump_vy = 0.0
+        self.airborne = False
+        self.platform = None
+        self.jump_target = None
+        self.state = State.IDLE
+        self.state_timer = 60
+
+    def drop(self):
+        self.airborne = True
+        self.platform = None
+        self.jump_target = None
+        self.state = State.JUMP
+        self.jump_vy = 0.0
+        self.jump_cooldown = 30
 
     def _matching_platform(self, platforms, platform):
         if not platform:
@@ -861,19 +931,28 @@ def main():
 
     while running:
         now = time.monotonic()
+        overlay.pump_events()
+        drag = overlay.consume_drag_state()
+
         if now - last_window_scan > 0.75:
             platforms = window_tracker.platforms()
             if not pet.airborne:
                 pet.sync_platforms(platforms)
             last_window_scan = now
 
-        pet.update(platforms)
+        if drag["position"] and (drag["dragging"] or drag["released"]):
+            pet.drag_to(*drag["position"])
+
+        if drag["released"]:
+            pet.drop()
+        elif not drag["dragging"]:
+            pet.update(platforms)
+
         canvas.fill(CLEAR)
         canvas.blit(draw_pet_frame(pet), (0, 0))
 
         overlay.move(round(pet.x), round(pet.y))
         overlay.show_surface(canvas)
-        overlay.pump_events()
 
         if now - last_reassert > 0.5:
             overlay.reassert_top()
