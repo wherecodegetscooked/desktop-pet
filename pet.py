@@ -321,6 +321,14 @@ _SDL_WINDOW = None  # SDL_Window* as an integer
 _PRIMARY_HEIGHT = 0  # primary display height in points, set in main()
 _OBJC_IMPL_REFS = []  # keep ctypes IMP callbacks alive forever
 
+# Core Graphics — we render to a CALayer ourselves instead of letting
+# SDL2 present the framebuffer (which strips alpha).
+_CG = None
+_CG_COLORSPACE = None
+_LAST_LAYER_BUFFER = None  # pin the ctypes buffer until next frame swaps it
+_kCGImageAlphaPremultipliedLast = 1
+_kCGBitmapByteOrder32Big = 4 << 12
+
 
 def _load_sdl2():
     """Locate and load the SDL2 dylib pygame is using."""
@@ -484,6 +492,14 @@ def configure_macos_window():
                 clear_cg = _msg(objc, clear_col, 'CGColor')
                 if clear_cg:
                     _msg(objc, layer, 'setBackgroundColor:', clear_cg)
+                # Crisp pixels when CA upscales on retina.
+                NSString = objc.objc_getClass(b'NSString')
+                nearest = _msg(objc, NSString,
+                               'stringWithUTF8String:', b'nearest',
+                               argtypes=[ctypes.c_char_p])
+                if nearest:
+                    _msg(objc, layer, 'setMagnificationFilter:', nearest)
+                    _msg(objc, layer, 'setMinificationFilter:', nearest)
                 # Diagnostic: what kind of layer is SDL2 giving us?
                 cls = _msg(objc, layer, 'class')
                 if cls:
@@ -542,6 +558,75 @@ def reassert_window_level():
 # Main
 # ---------------------------------------------------------------------------
 
+def _load_cg():
+    import ctypes, ctypes.util
+    cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library('CoreGraphics'))
+    cg.CGColorSpaceCreateDeviceRGB.restype = ctypes.c_void_p
+    cg.CGColorSpaceCreateDeviceRGB.argtypes = []
+    cg.CGColorSpaceRelease.argtypes = [ctypes.c_void_p]
+    cg.CGDataProviderCreateWithData.restype  = ctypes.c_void_p
+    cg.CGDataProviderCreateWithData.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+    ]
+    cg.CGDataProviderRelease.argtypes = [ctypes.c_void_p]
+    cg.CGImageCreate.restype  = ctypes.c_void_p
+    cg.CGImageCreate.argtypes = [
+        ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t,
+        ctypes.c_size_t, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
+        ctypes.c_void_p, ctypes.c_bool, ctypes.c_int,
+    ]
+    cg.CGImageRelease.argtypes = [ctypes.c_void_p]
+    return cg
+
+
+def push_surface_to_layer(surf):
+    """Build a CGImage from `surf` and set contentView.layer.contents.
+
+    SDL2's Cocoa_UpdateWindowFramebuffer creates its CGImage with
+    kCGImageAlphaNoneSkipFirst — alpha is discarded before the
+    compositor ever sees it, which is why the window renders opaque
+    black under transparent pixels. We bypass that path entirely:
+    pygame draws into an off-screen SRCALPHA surface, we wrap its
+    bytes in a CGImage with kCGImageAlphaPremultipliedLast, and hand
+    it to the CALayer directly."""
+    global _LAST_LAYER_BUFFER, _CG, _CG_COLORSPACE
+    import ctypes
+    if _MAC_OBJC is None or _MAC_WINDOW is None:
+        return
+    if _CG is None:
+        _CG = _load_cg()
+        _CG_COLORSPACE = _CG.CGColorSpaceCreateDeviceRGB()
+
+    content_view = _msg(_MAC_OBJC, _MAC_WINDOW, 'contentView')
+    if not content_view:
+        return
+    layer = _msg(_MAC_OBJC, content_view, 'layer')
+    if not layer:
+        return
+
+    pixels = pygame.image.tobytes(surf, 'RGBA')
+    w, h = surf.get_width(), surf.get_height()
+    buf = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
+
+    provider = _CG.CGDataProviderCreateWithData(None, buf, len(pixels), None)
+    if not provider:
+        return
+
+    cgimage = _CG.CGImageCreate(
+        w, h, 8, 32, w * 4, _CG_COLORSPACE,
+        _kCGImageAlphaPremultipliedLast | _kCGBitmapByteOrder32Big,
+        provider, None, False, 0
+    )
+    if cgimage:
+        _msg(_MAC_OBJC, layer, 'setContents:', cgimage)
+        _CG.CGImageRelease(cgimage)
+    _CG.CGDataProviderRelease(provider)
+
+    # Pin until next frame's setContents: replaces the layer's image —
+    # CGDataProviderCreateWithData stores a raw pointer with no copy.
+    _LAST_LAYER_BUFFER = buf
+
+
 def _screen_bounds():
     """Return (origin_x, origin_y, width, height) for the primary display
     in macOS global screen coordinates."""
@@ -592,6 +677,11 @@ def main():
     # global screen coords when moving the window.
     pet = Pet(SW, SH)
 
+    # Off-screen canvas. We never call pygame.display.flip() because SDL2's
+    # framebuffer path strips alpha (see push_surface_to_layer). Instead we
+    # draw here and push pixels straight to the window's CALayer.
+    canvas = pygame.Surface((W, H), pygame.SRCALPHA)
+
     frame_count = 0
     while True:
         for event in pygame.event.get():
@@ -603,10 +693,9 @@ def main():
 
         pet.update()
 
-        # Render sprite into the tiny window
-        screen.fill(CLEAR)
-        pet.draw(screen)
-        pygame.display.flip()
+        canvas.fill(CLEAR)
+        pet.draw(canvas)
+        push_surface_to_layer(canvas)
 
         # Move the window to follow the pet (translate to global coords)
         move_window(ox + int(pet.x), oy + int(pet.y))
