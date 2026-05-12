@@ -411,6 +411,15 @@ def configure_macos_window():
         _msg(objc, window, 'setBackgroundColor:', clear_col)
         _msg(objc, window, 'setHasShadow:', False, argtypes=[ctypes.c_bool])
 
+        # Mark the Metal/CA layer non-opaque so per-pixel alpha reaches
+        # the compositor — without this, SDL2's Metal layer renders as
+        # opaque and transparent pixels show as black.
+        content_view = _msg(objc, window, 'contentView')
+        if content_view:
+            layer = _msg(objc, content_view, 'layer')
+            if layer:
+                _msg(objc, layer, 'setOpaque:', False, argtypes=[ctypes.c_bool])
+
         # Click-through (mouse events pass to the app below)
         _msg(objc, window, 'setIgnoresMouseEvents:', True,
              argtypes=[ctypes.c_bool])
@@ -436,6 +445,12 @@ def reassert_window_level():
         NSColor   = _MAC_OBJC.objc_getClass(b'NSColor')
         clear_col = _msg(_MAC_OBJC, NSColor, 'clearColor')
         _msg(_MAC_OBJC, _MAC_WINDOW, 'setBackgroundColor:', clear_col)
+        content_view = _msg(_MAC_OBJC, _MAC_WINDOW, 'contentView')
+        if content_view:
+            layer = _msg(_MAC_OBJC, content_view, 'layer')
+            if layer:
+                _msg(_MAC_OBJC, layer, 'setOpaque:', False,
+                     argtypes=[ctypes.c_bool])
     except Exception:
         pass
 
