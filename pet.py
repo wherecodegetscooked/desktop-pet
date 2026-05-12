@@ -60,8 +60,8 @@ def draw_pet_pixels(px, facing_right, anim_frame, state, blink):
             px.set_at((6, 2), E)
             px.set_at((8, 2), E)
         else:
-            px.set_at((2, 2), E)
-            px.set_at((3, 2), E)
+            px.set_at((3, 3), E)
+            px.set_at((5, 3), E)
 
 
 def make_sprite(facing_right, anim_frame, state, blink):
@@ -304,6 +304,7 @@ _MAC_OBJC = None
 _MAC_WINDOW = None
 _SDL2 = None
 _SDL_WINDOW = None  # SDL_Window* as an integer
+_PRIMARY_HEIGHT = 0  # primary display height in points, set in main()
 
 
 def _load_sdl2():
@@ -336,9 +337,23 @@ def _get_sdl_window_ptr():
 
 
 def move_window(x, y):
-    if _SDL2 is None or _SDL_WINDOW is None:
+    """Move pet window to top-left screen coords (x, y).
+
+    AppKit windows use a bottom-left origin so we flip y against the primary
+    display height. Goes via NSWindow.setFrameOrigin: because
+    SDL_SetWindowPosition becomes a no-op once we tweak window level. An
+    NSPoint (struct of 2 CGFloats) is ABI-compatible with two consecutive
+    c_doubles on both x86_64 SysV and AArch64, so we send two doubles."""
+    import ctypes
+    if _MAC_OBJC is None or _MAC_WINDOW is None:
         return
-    _SDL2.SDL_SetWindowPosition(_SDL_WINDOW, int(x), int(y))
+    flipped_y = _PRIMARY_HEIGHT - y - SPRITE_H * SCALE
+    sel = _MAC_OBJC.sel_registerName(b'setFrameOrigin:')
+    proto = ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                              ctypes.c_double, ctypes.c_double)
+    fn = ctypes.cast(_MAC_OBJC.objc_msgSend, proto)
+    fn(_MAC_WINDOW, sel,
+       ctypes.c_double(float(x)), ctypes.c_double(float(flipped_y)))
 
 
 def configure_macos_window():
@@ -363,11 +378,11 @@ def configure_macos_window():
             return
 
         # Float across all Spaces + sit above full-screen apps.
-        # Set BEFORE opacity/background so AppKit doesn't reset them.
+        # Do NOT include NSWindowCollectionBehaviorStationary — it freezes
+        # the window's position so setFrameOrigin: becomes a no-op.
         #   NSWindowCollectionBehaviorCanJoinAllSpaces    = 1 << 0  = 1
-        #   NSWindowCollectionBehaviorStationary          = 1 << 4  = 16
         #   NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8  = 256
-        behavior = 1 | 16 | 256
+        behavior = 1 | 256
         _msg(objc, window, 'setCollectionBehavior:', behavior,
              argtypes=[ctypes.c_ulong])
 
@@ -433,11 +448,12 @@ def _screen_bounds():
 
 
 def main():
-    global _SDL2, _SDL_WINDOW
+    global _SDL2, _SDL_WINDOW, _PRIMARY_HEIGHT
 
     pygame.init()
 
     ox, oy, SW, SH = _screen_bounds()
+    _PRIMARY_HEIGHT = SH  # needed for AppKit y-flip in move_window
     W = SPRITE_W * SCALE
     H = SPRITE_H * SCALE
 
