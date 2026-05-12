@@ -10,7 +10,7 @@ import pygame
 
 
 FPS = 60
-SCALE = 6
+SCALE = 3
 SPRITE_W = 20
 SPRITE_H = 18
 WINDOW_W = SPRITE_W * SCALE
