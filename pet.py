@@ -31,6 +31,10 @@ NS_WINDOW_COLLECTION_IGNORES_CYCLE = 1 << 6
 NS_WINDOW_COLLECTION_FULLSCREEN_AUXILIARY = 1 << 8
 NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 CG_WINDOW_LEVEL_ASSISTIVE_TECH_HIGH = 20
+WINDOW_LIST_ON_SCREEN_ONLY = 1
+WINDOW_LIST_EXCLUDE_DESKTOP = 16
+GROUND_PLATFORM_NAME = "Desktop"
+GRAVITY = 0.42
 
 
 class State:
@@ -86,6 +90,127 @@ def _msg(objc, obj, selector, *args, restype=None, argtypes=None):
         else:
             converted.append(argtype(value))
     return fn(obj, sel, *converted)
+
+
+def _nsstring(objc, text):
+    NSString = objc.objc_getClass(b"NSString")
+    return _msg(
+        objc,
+        NSString,
+        "stringWithUTF8String:",
+        text.encode(),
+        argtypes=[ctypes.c_char_p],
+    )
+
+
+def _nsnumber_double(objc, number):
+    if not number:
+        return 0.0
+    return _msg(objc, number, "doubleValue", restype=ctypes.c_double)
+
+
+def _nsnumber_int(objc, number):
+    if not number:
+        return 0
+    return _msg(objc, number, "intValue", restype=ctypes.c_int)
+
+
+def _nsstring_text(objc, ns_string):
+    if not ns_string:
+        return ""
+    value = _msg(objc, ns_string, "UTF8String", restype=ctypes.c_char_p)
+    return value.decode(errors="ignore") if value else ""
+
+
+class WindowTracker:
+    def __init__(self, screen_w, screen_h):
+        self.screen_w = screen_w
+        self.screen_h = screen_h
+        self.objc = _objc_setup()
+        self.cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
+        self.cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+        self.cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+        self.cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        self.cf.CFRelease.argtypes = [ctypes.c_void_p]
+        self.keys = {
+            name: _nsstring(self.objc, name)
+            for name in (
+                "kCGWindowBounds",
+                "kCGWindowLayer",
+                "kCGWindowAlpha",
+                "kCGWindowOwnerName",
+                "X",
+                "Y",
+                "Width",
+                "Height",
+            )
+        }
+
+    def platforms(self):
+        platforms = [
+            {
+                "x": 0,
+                "y": self.screen_h,
+                "w": self.screen_w,
+                "h": 1,
+                "name": GROUND_PLATFORM_NAME,
+            }
+        ]
+
+        options = WINDOW_LIST_ON_SCREEN_ONLY | WINDOW_LIST_EXCLUDE_DESKTOP
+        array = self.cg.CGWindowListCopyWindowInfo(options, 0)
+        if not array:
+            return platforms
+
+        try:
+            count = _msg(self.objc, array, "count", restype=ctypes.c_ulong)
+            for i in range(count):
+                info = _msg(
+                    self.objc,
+                    array,
+                    "objectAtIndex:",
+                    i,
+                    argtypes=[ctypes.c_ulong],
+                )
+                platform = self._platform_from_window(info)
+                if platform:
+                    platforms.append(platform)
+        finally:
+            self.cf.CFRelease(array)
+
+        platforms.sort(key=lambda item: item["y"])
+        return platforms
+
+    def _dict_value(self, dictionary, key):
+        return _msg(self.objc, dictionary, "objectForKey:", self.keys[key])
+
+    def _platform_from_window(self, info):
+        layer = _nsnumber_int(self.objc, self._dict_value(info, "kCGWindowLayer"))
+        alpha = _nsnumber_double(self.objc, self._dict_value(info, "kCGWindowAlpha"))
+        if layer != 0 or alpha <= 0.05:
+            return None
+
+        bounds = self._dict_value(info, "kCGWindowBounds")
+        if not bounds:
+            return None
+
+        x = _nsnumber_double(self.objc, self._dict_value(bounds, "X"))
+        y = _nsnumber_double(self.objc, self._dict_value(bounds, "Y"))
+        w = _nsnumber_double(self.objc, self._dict_value(bounds, "Width"))
+        h = _nsnumber_double(self.objc, self._dict_value(bounds, "Height"))
+        if w < WINDOW_W * 1.4 or h < WINDOW_H * 0.9:
+            return None
+        if y < WINDOW_H + 8 or y > self.screen_h - 24:
+            return None
+
+        owner = _nsstring_text(self.objc, self._dict_value(info, "kCGWindowOwnerName"))
+        return {
+            "x": int(max(0, x)),
+            "y": int(max(0, y)),
+            "w": int(min(w, self.screen_w - max(0, x))),
+            "h": int(h),
+            "name": owner or "Window",
+        }
 
 
 class MacOverlay:
@@ -306,6 +431,9 @@ class Pet:
         self.look_timer = random.randint(60, 180)
         self.ground_y = self.y
         self.jump_vy = 0.0
+        self.airborne = False
+        self.platform = None
+        self.jump_target = None
         self.pick_state()
 
     def pick_state(self):
@@ -331,27 +459,44 @@ class Pet:
             self.state_timer = random.randint(45, 115)
         else:
             self.state = State.JUMP
-            self.ground_y = self.y
-            self.jump_vy = random.uniform(-8.5, -5.5)
-            self.vx = random.uniform(-2.5, 2.5)
-            self.vy = 0.0
-            self.state_timer = 240
+            self.start_jump()
 
-    def update(self):
+    def start_jump(self, target=None):
+        self.state = State.JUMP
+        self.airborne = True
+        self.jump_target = target
+        self.jump_vy = random.uniform(-8.5, -5.5)
+        if target:
+            target_center = target["x"] + target["w"] * 0.5
+            pet_center = self.x + WINDOW_W * 0.5
+            self.vx = max(-4.6, min(4.6, (target_center - pet_center) / 58))
+            self.jump_vy = random.uniform(-10.5, -7.2)
+        elif abs(self.vx) < 0.3:
+            self.vx = random.uniform(-2.5, 2.5)
+        self.vy = 0.0
+        self.state_timer = 240
+
+    def update(self, platforms):
         self.frame += 1
         self.state_timer -= 1
         self._update_face()
 
-        if self.state == State.JUMP:
-            self.jump_vy += 0.42
+        if not self.airborne and self.state != State.JUMP:
+            self._maybe_jump_to_window(platforms)
+
+        if self.airborne or self.state == State.JUMP:
+            self.jump_vy += GRAVITY
             self.y += self.jump_vy
             self.x += self.vx
-            if self.y >= self.ground_y:
-                self.y = self.ground_y
-                self.pick_state()
+            self._land_if_possible(platforms)
         else:
             self.x += self.vx
-            self.y += self.vy
+            if self.platform and self._feet_inside_platform(self.platform):
+                self.y = self.platform["y"] - WINDOW_H
+            else:
+                self.airborne = True
+                self.state = State.JUMP
+                self.jump_vy = 0.0
 
         if self.vx > 0.1:
             self.facing_right = True
@@ -370,17 +515,15 @@ class Pet:
         if self.y < 0:
             self.y = 0
             self.vy = abs(self.vy)
-            if self.state == State.JUMP:
-                self.jump_vy = abs(self.jump_vy) * 0.35
+            self.jump_vy = abs(self.jump_vy) * 0.35
         elif self.y + WINDOW_H > self.screen_h:
             self.y = self.screen_h - WINDOW_H
+            self.airborne = False
+            self.platform = platforms[0] if platforms else None
             if self.state == State.JUMP:
-                self.jump_vy = 0.0
                 self.pick_state()
-            else:
-                self.vy = -abs(self.vy)
 
-        if self.state_timer <= 0:
+        if self.state_timer <= 0 and not self.airborne:
             self.pick_state()
 
     def _update_face(self):
@@ -397,6 +540,70 @@ class Pet:
         if self.look_timer <= 0:
             self.look_offset = random.choice([-1, 0, 1])
             self.look_timer = random.randint(45, 160)
+
+    def place_on_best_platform(self, platforms):
+        below = [
+            platform
+            for platform in platforms
+            if self._feet_x() >= platform["x"]
+            and self._feet_x() <= platform["x"] + platform["w"]
+            and platform["y"] >= self.y + WINDOW_H - 4
+        ]
+        self.platform = min(below, key=lambda item: item["y"], default=platforms[0])
+        self.y = self.platform["y"] - WINDOW_H
+        self.airborne = False
+
+    def _feet_x(self):
+        return self.x + WINDOW_W * 0.5
+
+    def _feet_inside_platform(self, platform):
+        foot = self._feet_x()
+        return platform["x"] + 8 <= foot <= platform["x"] + platform["w"] - 8
+
+    def _landing_platform(self, platforms):
+        previous_feet_y = self.y + WINDOW_H - self.jump_vy
+        feet_y = self.y + WINDOW_H
+        foot_x = self._feet_x()
+        candidates = []
+        for platform in platforms:
+            if not (platform["x"] <= foot_x <= platform["x"] + platform["w"]):
+                continue
+            if previous_feet_y <= platform["y"] <= feet_y:
+                candidates.append(platform)
+        return min(candidates, key=lambda item: item["y"], default=None)
+
+    def _land_if_possible(self, platforms):
+        if self.jump_vy < 0:
+            return
+        platform = self._landing_platform(platforms)
+        if not platform:
+            return
+        self.platform = platform
+        self.y = platform["y"] - WINDOW_H
+        self.airborne = False
+        self.jump_target = None
+        self.pick_state()
+
+    def _maybe_jump_to_window(self, platforms):
+        if self.state not in (State.IDLE, State.WALK):
+            return
+        if random.random() > 0.006:
+            return
+
+        foot = self._feet_x()
+        current_y = self.y + WINDOW_H
+        candidates = []
+        for platform in platforms:
+            if platform is self.platform or platform["name"] == GROUND_PLATFORM_NAME:
+                continue
+            center = platform["x"] + platform["w"] * 0.5
+            distance = abs(center - foot)
+            vertical = platform["y"] - current_y
+            if distance < 520 and -260 < vertical < 180:
+                candidates.append(platform)
+
+        if candidates:
+            self.start_jump(random.choice(candidates))
 
 
 def px(surface, x, y, color):
@@ -495,13 +702,24 @@ def main():
     pygame.init()
     overlay = MacOverlay(WINDOW_W, WINDOW_H)
     _, _, screen_w, screen_h = overlay.screen_bounds()
+    window_tracker = WindowTracker(screen_w, screen_h)
+    platforms = window_tracker.platforms()
     pet = Pet(screen_w, screen_h)
+    pet.place_on_best_platform(platforms)
     canvas = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
     clock = pygame.time.Clock()
     last_reassert = 0.0
+    last_window_scan = 0.0
 
     while running:
-        pet.update()
+        now = time.monotonic()
+        if now - last_window_scan > 0.75:
+            platforms = window_tracker.platforms()
+            if not pet.airborne:
+                pet.place_on_best_platform(platforms)
+            last_window_scan = now
+
+        pet.update(platforms)
         canvas.fill(CLEAR)
         canvas.blit(draw_pet_frame(pet), (0, 0))
 
@@ -509,7 +727,6 @@ def main():
         overlay.show_surface(canvas)
         overlay.pump_events()
 
-        now = time.monotonic()
         if now - last_reassert > 0.5:
             overlay.reassert_top()
             last_reassert = now
