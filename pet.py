@@ -1,6 +1,7 @@
 import ctypes
 import ctypes.util
 import math
+import os
 import random
 import signal
 import sys
@@ -30,6 +31,7 @@ NS_WINDOW_COLLECTION_CAN_JOIN_ALL_SPACES = 1 << 0
 NS_WINDOW_COLLECTION_IGNORES_CYCLE = 1 << 6
 NS_WINDOW_COLLECTION_FULLSCREEN_AUXILIARY = 1 << 8
 NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
+NS_STATUS_ITEM_VARIABLE_LENGTH = -1.0
 CG_WINDOW_LEVEL_ASSISTIVE_TECH_HIGH = 20
 WINDOW_LIST_ON_SCREEN_ONLY = 1
 WINDOW_LIST_EXCLUDE_DESKTOP = 16
@@ -38,6 +40,7 @@ GRAVITY = 0.42
 NSEVENT_LEFT_MOUSE_DOWN = 1
 NSEVENT_LEFT_MOUSE_UP = 2
 NSEVENT_LEFT_MOUSE_DRAGGED = 6
+MENU_ICON_SIZE = 18.0
 
 # Jump tuning ---------------------------------------------------------------
 # Increase these to make the pet jump more often or jump higher.
@@ -309,6 +312,7 @@ class MacOverlay:
         self.cg = self._load_core_graphics()
         self.colorspace = self.cg.CGColorSpaceCreateDeviceRGB()
         self.nsapp = None
+        self.status_item = None
         self.window = None
         self.layer = None
         self.last_buffer = None
@@ -317,8 +321,14 @@ class MacOverlay:
         self.drag_offset = NSPoint(0, 0)
         self.drag_position = None
         self.drag_released = False
+        self._seen_visible = False
 
         self._create_window()
+
+    def _resource_path(self, filename):
+        if hasattr(sys, "_MEIPASS"):
+            return os.path.join(getattr(sys, "_MEIPASS"), filename)
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), filename)
 
     def _load_core_graphics(self):
         cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
@@ -419,6 +429,85 @@ class MacOverlay:
         _msg(objc, self.layer, "setMagnificationFilter:", nearest)
         _msg(objc, self.layer, "setMinificationFilter:", nearest)
         _msg(objc, self.window, "orderFrontRegardless")
+        self._create_status_menu()
+
+    def _create_status_menu(self):
+        objc = self.objc
+        NSStatusBar = objc.objc_getClass(b"NSStatusBar")
+        NSMenu = objc.objc_getClass(b"NSMenu")
+        NSMenuItem = objc.objc_getClass(b"NSMenuItem")
+        NSImage = objc.objc_getClass(b"NSImage")
+
+        status_bar = _msg(objc, NSStatusBar, "systemStatusBar")
+        self.status_item = _msg(
+            objc,
+            status_bar,
+            "statusItemWithLength:",
+            NS_STATUS_ITEM_VARIABLE_LENGTH,
+            argtypes=[ctypes.c_double],
+        )
+
+        button = _msg(objc, self.status_item, "button")
+        icon_path = self._resource_path("sprite.png")
+        icon_loaded = False
+
+        symbol_image = _msg(
+            objc,
+            NSImage,
+            "imageWithSystemSymbolName:accessibilityDescription:",
+            _nsstring(objc, "pawprint.fill"),
+            _nsstring(objc, "Desktop Pet"),
+            argtypes=[ctypes.c_void_p, ctypes.c_void_p],
+        )
+        if symbol_image:
+            _msg(objc, symbol_image, "setSize:", NSSize(MENU_ICON_SIZE, MENU_ICON_SIZE), argtypes=[NSSize])
+            _msg(objc, symbol_image, "setTemplate:", False, argtypes=[ctypes.c_bool])
+            _msg(objc, button, "setImage:", symbol_image, argtypes=[ctypes.c_void_p])
+            icon_loaded = True
+
+        if os.path.exists(icon_path):
+            image = _msg(objc, NSImage, "alloc")
+            image = _msg(
+                objc,
+                image,
+                "initWithContentsOfFile:",
+                _nsstring(objc, icon_path),
+                argtypes=[ctypes.c_void_p],
+            )
+            if image:
+                _msg(objc, image, "setSize:", NSSize(MENU_ICON_SIZE, MENU_ICON_SIZE), argtypes=[NSSize])
+                _msg(objc, button, "setImage:", image, argtypes=[ctypes.c_void_p])
+                icon_loaded = True
+
+        title = _nsstring(objc, "" if icon_loaded else "Pet")
+        tooltip = _nsstring(objc, "Desktop Pet")
+        _msg(objc, button, "setTitle:", title, argtypes=[ctypes.c_void_p])
+        _msg(objc, button, "setToolTip:", tooltip, argtypes=[ctypes.c_void_p])
+
+        menu = _msg(objc, NSMenu, "alloc")
+        menu = _msg(objc, menu, "init")
+        _msg(objc, menu, "setAutoenablesItems:", False, argtypes=[ctypes.c_bool])
+        quit_item = _msg(objc, NSMenuItem, "alloc")
+        quit_item = _msg(
+            objc,
+            quit_item,
+            "initWithTitle:action:keyEquivalent:",
+            _nsstring(objc, "Quit Desktop Pet"),
+            objc.sel_registerName(b"orderOut:"),
+            _nsstring(objc, "q"),
+            argtypes=[ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p],
+        )
+        _msg(objc, quit_item, "setTarget:", self.window, argtypes=[ctypes.c_void_p])
+        _msg(objc, quit_item, "setEnabled:", True, argtypes=[ctypes.c_bool])
+        _msg(objc, menu, "addItem:", quit_item, argtypes=[ctypes.c_void_p])
+        _msg(objc, self.status_item, "setMenu:", menu, argtypes=[ctypes.c_void_p])
+
+    def should_quit(self):
+        window_visible = _msg(self.objc, self.window, "isVisible", restype=ctypes.c_bool)
+        if window_visible:
+            self._seen_visible = True
+            return False
+        return self._seen_visible
 
     def screen_bounds(self):
         bounds = self.cg.CGDisplayBounds(self.cg.CGMainDisplayID())
@@ -957,6 +1046,9 @@ def main():
     while running:
         now = time.monotonic()
         overlay.pump_events()
+        if overlay.should_quit():
+            running = False
+            continue
         drag = overlay.consume_drag_state()
 
         if now - last_window_scan > 0.75:

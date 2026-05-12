@@ -12,14 +12,18 @@ A small desktop companion application implemented in Python that shows a cute vi
 - See `requirements.txt` for Python dependencies
 
 ## Installation
-1. Clone the repo:
+1. For the easiest setup, download the latest macOS DMG from GitHub Releases, open it, and drag `Desktop Pet.app` to Applications. The release build is intended to be universal, so one download should work on both Intel and Apple Silicon Macs.
+
+2. If macOS warns that the app is from an unidentified developer, right-click the app and choose Open once. This project is not signed or notarized.
+
+3. To build from source yourself, clone the repo:
 
 ```
 git clone https://github.com/your-username/desktop-pet.git
 cd desktop-pet
 ```
 
-2. Create a virtual environment (recommended) and install dependencies:
+4. Create a virtual environment (recommended) and install dependencies:
 
 ```bash
 python3 -m venv venv
@@ -27,12 +31,21 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+5. To create a local release DMG without the App Store, install PyInstaller and run the build script. You can set TARGET_ARCH=universal2 on Apple Silicon if you want to try a universal build locally:
+
+```bash
+python3 -m pip install pyinstaller
+./build_macos_release.sh
+```
+
 ## Usage
-Run the pet with:
+For local development, run the pet with:
 
 ```bash
 python pet.py
 ```
+
+For the packaged app, open `Desktop Pet.app`.
 
 Behavior and controls depend on the implementation in `pet.py`. Open that file to customize appearance, animations, and interactions.
 
