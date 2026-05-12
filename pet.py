@@ -164,6 +164,7 @@ class WindowTracker:
         platforms = [
             {
                 "id": "desktop",
+                "base_id": "desktop",
                 "x": 0,
                 "y": self.screen_h,
                 "w": self.screen_w,
@@ -179,6 +180,7 @@ class WindowTracker:
             return platforms
 
         try:
+            occluders = []
             count = _msg(self.objc, array, "count", restype=ctypes.c_ulong)
             for i in range(count):
                 info = _msg(
@@ -188,7 +190,11 @@ class WindowTracker:
                     i,
                     argtypes=[ctypes.c_ulong],
                 )
-                platforms.extend(self._platforms_from_window(info))
+                window = self._window_from_info(info)
+                if not window:
+                    continue
+                platforms.extend(self._platforms_from_window(window, occluders))
+                occluders.append(window)
         finally:
             self.cf.CFRelease(array)
 
@@ -198,57 +204,96 @@ class WindowTracker:
     def _dict_value(self, dictionary, key):
         return _msg(self.objc, dictionary, "objectForKey:", self.keys[key])
 
-    def _platforms_from_window(self, info):
+    def _window_from_info(self, info):
         layer = _nsnumber_int(self.objc, self._dict_value(info, "kCGWindowLayer"))
         alpha = _nsnumber_double(self.objc, self._dict_value(info, "kCGWindowAlpha"))
         if layer != 0 or alpha <= 0.05:
-            return []
+            return None
 
         bounds = self._dict_value(info, "kCGWindowBounds")
         if not bounds:
-            return []
+            return None
 
         x = _nsnumber_double(self.objc, self._dict_value(bounds, "X"))
         y = _nsnumber_double(self.objc, self._dict_value(bounds, "Y"))
         w = _nsnumber_double(self.objc, self._dict_value(bounds, "Width"))
         h = _nsnumber_double(self.objc, self._dict_value(bounds, "Height"))
         if w < WINDOW_W * 1.4 or h < WINDOW_H * 0.9:
-            return []
+            return None
 
         window_id = _nsnumber_int(self.objc, self._dict_value(info, "kCGWindowNumber"))
         owner = _nsstring_text(self.objc, self._dict_value(info, "kCGWindowOwnerName"))
         px = int(max(0, x))
         pw = int(min(w, self.screen_w - px))
-        name = owner or "Window"
+        py = int(max(0, y))
+        ph = int(h)
+        return {
+            "id": window_id,
+            "x": px,
+            "y": py,
+            "w": pw,
+            "h": ph,
+            "name": owner or "Window",
+        }
 
+    def _platforms_from_window(self, window, occluders):
         platforms = []
-        top_y = int(max(0, y))
-        bottom_y = int(max(0, y + h))
+        top_y = window["y"]
+        bottom_y = window["y"] + window["h"]
         if WINDOW_H + 8 <= top_y <= self.screen_h - 24:
-            platforms.append(
-                {
-                    "id": f"{window_id}:top",
-                    "x": px,
-                    "y": top_y,
-                    "w": pw,
-                    "h": 1,
-                    "name": name,
-                    "edge": "top",
-                }
+            platforms.extend(
+                self._edge_platforms(window, "top", top_y, occluders)
             )
         if WINDOW_H + 8 <= bottom_y <= self.screen_h - 24:
+            platforms.extend(
+                self._edge_platforms(window, "bottom", bottom_y, occluders)
+            )
+        return platforms
+
+    def _edge_platforms(self, window, edge, edge_y, occluders):
+        segments = [(window["x"], window["x"] + window["w"])]
+        for occluder in occluders:
+            if not (occluder["y"] <= edge_y <= occluder["y"] + occluder["h"]):
+                continue
+            segments = self._subtract_interval(
+                segments,
+                occluder["x"],
+                occluder["x"] + occluder["w"],
+            )
+            if not segments:
+                return []
+
+        platforms = []
+        min_width = int(WINDOW_W * 1.25)
+        for index, (left, right) in enumerate(segments):
+            width = right - left
+            if width < min_width:
+                continue
             platforms.append(
                 {
-                    "id": f"{window_id}:bottom",
-                    "x": px,
-                    "y": bottom_y,
-                    "w": pw,
+                    "id": f"{window['id']}:{edge}:{index}:{left}",
+                    "base_id": f"{window['id']}:{edge}",
+                    "x": left,
+                    "y": edge_y,
+                    "w": width,
                     "h": 1,
-                    "name": name,
-                    "edge": "bottom",
+                    "name": window["name"],
+                    "edge": edge,
                 }
             )
         return platforms
+
+    def _subtract_interval(self, segments, cut_left, cut_right):
+        result = []
+        for left, right in segments:
+            if cut_right <= left or cut_left >= right:
+                result.append((left, right))
+                continue
+            if cut_left > left:
+                result.append((left, max(left, cut_left)))
+            if cut_right < right:
+                result.append((min(right, cut_right), right))
+        return result
 
 
 class MacOverlay:
@@ -621,6 +666,10 @@ class Pet:
         for candidate in platforms:
             if candidate.get("id") == platform.get("id"):
                 return candidate
+        for candidate in platforms:
+            if candidate.get("base_id") == platform.get("base_id"):
+                if self._feet_inside_platform(candidate):
+                    return candidate
         return None
 
     def _feet_x(self):
@@ -668,6 +717,8 @@ class Pet:
         candidates = []
         for platform in platforms:
             if platform.get("id") == (self.platform or {}).get("id"):
+                continue
+            if platform.get("base_id") == (self.platform or {}).get("base_id"):
                 continue
             if platform["name"] == GROUND_PLATFORM_NAME:
                 continue
