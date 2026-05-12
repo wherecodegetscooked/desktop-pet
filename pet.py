@@ -41,16 +41,17 @@ NSEVENT_LEFT_MOUSE_DRAGGED = 6
 
 # Jump tuning ---------------------------------------------------------------
 # Increase these to make the pet jump more often or jump higher.
-RANDOM_JUMP_STATE_CHANCE = 0.1      # Chance that a new random state is JUMP.
-WINDOW_JUMP_CHANCE = 0.006           # Per-frame chance to jump to another window.
+RANDOM_JUMP_STATE_CHANCE = 0.03      # Chance that a new random state is JUMP.
+WINDOW_JUMP_CHANCE = 0.002           # Per-frame chance to jump to another window.
 NORMAL_JUMP_POWER_MIN = 5.5          # Smaller hop when jumping without a target.
 NORMAL_JUMP_POWER_MAX = 6.0
-TARGET_JUMP_POWER_MIN = 7.0          # Minimum power for window-to-window jumps.
+TARGET_JUMP_POWER_MIN = 8.0          # Minimum power for window-to-window jumps.
 MAX_TARGET_JUMP_POWER = 38.0         # Raise this to reach very high windows.
 TARGET_JUMP_EXTRA_HEIGHT = 72        # Extra arc height above the destination edge.
 MAX_TARGET_JUMP_SPEED_X = 6.0        # Horizontal speed cap for long jumps.
 MAX_TARGET_DISTANCE = 0.3           # Fraction of screen width considered reachable.
-MAX_TARGET_HEIGHT = 1.2              # Fraction of screen height considered reachable.
+MAX_TARGET_HEIGHT = 1.5              # Fraction of screen height considered reachable.
+MIN_PLATFORM_Y = 0                   # Allows high ledges where pet stands off-screen.
 
 
 class State:
@@ -243,11 +244,11 @@ class WindowTracker:
         platforms = []
         top_y = window["y"]
         bottom_y = window["y"] + window["h"]
-        if WINDOW_H + 8 <= top_y <= self.screen_h - 24:
+        if MIN_PLATFORM_Y <= top_y <= self.screen_h - 24:
             platforms.extend(
                 self._edge_platforms(window, "top", top_y, occluders)
             )
-        if WINDOW_H + 8 <= bottom_y <= self.screen_h - 24:
+        if MIN_PLATFORM_Y <= bottom_y <= self.screen_h - 24:
             platforms.extend(
                 self._edge_platforms(window, "bottom", bottom_y, occluders)
             )
@@ -572,31 +573,31 @@ class Pet:
 
     def pick_state(self):
         r = random.random()
-        if r < 0.55:
+        if r < 0.50:
             self.state = State.WALK
-            speed = random.uniform(0.7, 1.8)
+            speed = random.uniform(0.35, 1.05)
             direction = 1 if random.random() > 0.5 else -1
             self.vx = direction * speed
-            self.vy = random.uniform(-0.25, 0.25)
-            self.state_timer = random.randint(100, 300)
-        elif r < 0.75:
+            self.vy = random.uniform(-0.12, 0.12)
+            self.state_timer = random.randint(160, 420)
+        elif r < 0.90:
             self.state = State.IDLE
             self.vx = 0.0
             self.vy = 0.0
-            self.state_timer = random.randint(70, 190)
+            self.state_timer = random.randint(120, 360)
         elif r < 1.0 - RANDOM_JUMP_STATE_CHANCE:
             self.state = State.RUN
-            speed = random.uniform(3.0, 5.6)
+            speed = random.uniform(1.8, 3.0)
             direction = 1 if random.random() > 0.5 else -1
             self.vx = direction * speed
-            self.vy = random.uniform(-0.35, 0.35)
-            self.state_timer = random.randint(45, 115)
+            self.vy = random.uniform(-0.18, 0.18)
+            self.state_timer = random.randint(30, 75)
         else:
             if self.jump_cooldown > 0:
                 self.state = State.WALK
-                self.vx = random.choice([-1, 1]) * random.uniform(0.7, 1.8)
-                self.vy = random.uniform(-0.25, 0.25)
-                self.state_timer = random.randint(80, 180)
+                self.vx = random.choice([-1, 1]) * random.uniform(0.35, 1.05)
+                self.vy = random.uniform(-0.12, 0.12)
+                self.state_timer = random.randint(120, 260)
             else:
                 self.state = State.JUMP
                 self.start_jump()
@@ -613,7 +614,7 @@ class Pet:
             current_feet_y = self.y + WINDOW_H
             rise = max(0, current_feet_y - target_feet_y)
             distance = target_center - pet_center
-            clearance = max(4, min(TARGET_JUMP_EXTRA_HEIGHT, target_feet_y - WINDOW_H - 8))
+            clearance = TARGET_JUMP_EXTRA_HEIGHT
             self.jump_vy = -min(
                 MAX_TARGET_JUMP_POWER,
                 max(TARGET_JUMP_POWER_MIN, math.sqrt(2 * GRAVITY * (rise + clearance))),
