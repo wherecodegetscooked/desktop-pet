@@ -186,8 +186,10 @@ class Pet:
             self._pick_state()
 
     def draw(self, screen):
+        # Window is sprite-sized; draw at (0, 0). Window itself is moved to
+        # the pet's screen position each frame via SDL_SetWindowPosition.
         sprite = make_sprite(self.facing_right, self.frame, self.state, self.blink)
-        screen.blit(sprite, (int(self.x), int(self.y)))
+        screen.blit(sprite, (0, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +302,43 @@ def _get_sdl_nswindow(objc):
 # Globals so the main loop can re-assert window state each frame.
 _MAC_OBJC = None
 _MAC_WINDOW = None
+_SDL2 = None
+_SDL_WINDOW = None  # SDL_Window* as an integer
+
+
+def _load_sdl2():
+    """Locate and load the SDL2 dylib pygame is using."""
+    import ctypes, ctypes.util, glob
+    path = ctypes.util.find_library('SDL2')
+    if not path:
+        import pygame as _pg
+        pkg_dir = os.path.dirname(_pg.__file__)
+        for found in glob.glob(os.path.join(pkg_dir, '**', '*SDL2*.dylib'),
+                               recursive=True):
+            path = found
+            break
+    if not path:
+        return None
+    sdl2 = ctypes.cdll.LoadLibrary(path)
+    sdl2.SDL_SetWindowPosition.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    sdl2.SDL_SetWindowPosition.restype  = None
+    return sdl2
+
+
+def _get_sdl_window_ptr():
+    """Extract SDL_Window* (as int) from pygame's wm_info capsule."""
+    import ctypes
+    PyCapsule_GetPointer = ctypes.pythonapi.PyCapsule_GetPointer
+    PyCapsule_GetPointer.restype  = ctypes.c_void_p
+    PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+    wm = pygame.display.get_wm_info()
+    return PyCapsule_GetPointer(wm['window'], b'window')
+
+
+def move_window(x, y):
+    if _SDL2 is None or _SDL_WINDOW is None:
+        return
+    _SDL2.SDL_SetWindowPosition(_SDL_WINDOW, int(x), int(y))
 
 
 def configure_macos_window():
@@ -323,38 +362,29 @@ def configure_macos_window():
             print("Warning: no NSWindow found — transparency not applied.")
             return
 
-        # Transparent background
-        NSColor   = objc.objc_getClass(b'NSColor')
-        clear_col = _msg(objc, NSColor, 'clearColor')
-        _msg(objc, window, 'setBackgroundColor:', clear_col)
-        _msg(objc, window, 'setOpaque:', False, argtypes=[ctypes.c_bool])
-
-        # Click-through
-        _msg(objc, window, 'setIgnoresMouseEvents:', True,
-             argtypes=[ctypes.c_bool])
-
-        # Always on top — NSScreenSaverWindowLevel = 1000
-        # (kCGMaximumWindowLevel = 2147483630 if you want above OS chrome too)
-        _msg(objc, window, 'setLevel:', 1000, argtypes=[ctypes.c_long])
-
         # Float across all Spaces + sit above full-screen apps.
-        #   NSWindowCollectionBehaviorCanJoinAllSpaces      = 1 << 0  = 1
-        #   NSWindowCollectionBehaviorStationary            = 1 << 4  = 16
-        #   NSWindowCollectionBehaviorIgnoresCycle          = 1 << 6  = 64
-        #   NSWindowCollectionBehaviorFullScreenAuxiliary   = 1 << 8  = 256
-        behavior = 1 | 16 | 64 | 256
+        # Set BEFORE opacity/background so AppKit doesn't reset them.
+        #   NSWindowCollectionBehaviorCanJoinAllSpaces    = 1 << 0  = 1
+        #   NSWindowCollectionBehaviorStationary          = 1 << 4  = 16
+        #   NSWindowCollectionBehaviorFullScreenAuxiliary = 1 << 8  = 256
+        behavior = 1 | 16 | 256
         _msg(objc, window, 'setCollectionBehavior:', behavior,
              argtypes=[ctypes.c_ulong])
 
-        # Hide from Dock / Cmd-Tab so it really feels like an overlay.
-        # NSApplicationActivationPolicyAccessory = 1
-        NSApp = _msg(objc, objc.objc_getClass(b'NSApplication'),
-                     'sharedApplication')
-        _msg(objc, NSApp, 'setActivationPolicy:', 1,
-             argtypes=[ctypes.c_long], restype=ctypes.c_bool)
+        # Always on top — NSStatusWindowLevel = 25 sits above normal app
+        # windows but below the system menu bar, so the menu stays usable.
+        _msg(objc, window, 'setLevel:', 25, argtypes=[ctypes.c_long])
 
-        # Make sure the window is actually ordered to the front.
-        _msg(objc, window, 'orderFrontRegardless')
+        # Transparent background  (do this AFTER level/behavior changes)
+        NSColor   = objc.objc_getClass(b'NSColor')
+        clear_col = _msg(objc, NSColor, 'clearColor')
+        _msg(objc, window, 'setOpaque:', False, argtypes=[ctypes.c_bool])
+        _msg(objc, window, 'setBackgroundColor:', clear_col)
+        _msg(objc, window, 'setHasShadow:', False, argtypes=[ctypes.c_bool])
+
+        # Click-through (mouse events pass to the app below)
+        _msg(objc, window, 'setIgnoresMouseEvents:', True,
+             argtypes=[ctypes.c_bool])
 
         _MAC_OBJC   = objc
         _MAC_WINDOW = window
@@ -365,14 +395,18 @@ def configure_macos_window():
 
 
 def reassert_window_level():
-    """Re-apply window level + orderFront. Called every ~1s from the main loop
-    to defeat SDL/AppKit resets when the app loses focus."""
+    """Re-apply window level + transparency. Called periodically to defeat
+    any AppKit/SDL resets that push us behind apps or make us opaque."""
     import ctypes
     if _MAC_OBJC is None or _MAC_WINDOW is None:
         return
     try:
-        _msg(_MAC_OBJC, _MAC_WINDOW, 'setLevel:', 1000, argtypes=[ctypes.c_long])
-        _msg(_MAC_OBJC, _MAC_WINDOW, 'orderFrontRegardless')
+        _msg(_MAC_OBJC, _MAC_WINDOW, 'setLevel:', 25, argtypes=[ctypes.c_long])
+        _msg(_MAC_OBJC, _MAC_WINDOW, 'setOpaque:', False,
+             argtypes=[ctypes.c_bool])
+        NSColor   = _MAC_OBJC.objc_getClass(b'NSColor')
+        clear_col = _msg(_MAC_OBJC, NSColor, 'clearColor')
+        _msg(_MAC_OBJC, _MAC_WINDOW, 'setBackgroundColor:', clear_col)
     except Exception:
         pass
 
@@ -381,23 +415,49 @@ def reassert_window_level():
 # Main
 # ---------------------------------------------------------------------------
 
+def _screen_bounds():
+    """Return (origin_x, origin_y, width, height) for the primary display
+    in macOS global screen coordinates."""
+    import ctypes, ctypes.util
+    cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library('CoreGraphics'))
+
+    class CGRect(ctypes.Structure):
+        _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double),
+                    ('w', ctypes.c_double), ('h', ctypes.c_double)]
+
+    cg.CGMainDisplayID.restype  = ctypes.c_uint32
+    cg.CGDisplayBounds.restype  = CGRect
+    cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+    r = cg.CGDisplayBounds(cg.CGMainDisplayID())
+    return int(r.x), int(r.y), int(r.w), int(r.h)
+
+
 def main():
-    os.environ.setdefault('SDL_VIDEO_WINDOW_POS', '0,0')
+    global _SDL2, _SDL_WINDOW
 
     pygame.init()
-    info = pygame.display.Info()
-    SW, SH = info.current_w, info.current_h
 
-    screen = pygame.display.set_mode((SW, SH), pygame.NOFRAME | pygame.SRCALPHA)
+    ox, oy, SW, SH = _screen_bounds()
+    W = SPRITE_W * SCALE
+    H = SPRITE_H * SCALE
+
+    # Position the window initially at the center of the primary display.
+    os.environ['SDL_VIDEO_WINDOW_POS'] = f'{ox + SW // 2},{oy + SH // 2}'
+
+    screen = pygame.display.set_mode((W, H), pygame.NOFRAME | pygame.SRCALPHA)
     pygame.display.set_caption("Desktop Pet")
 
-    # Pump events so the NSWindow is created before we try to fetch it
     pygame.event.pump()
     time.sleep(0.05)
+
+    _SDL2 = _load_sdl2()
+    _SDL_WINDOW = _get_sdl_window_ptr()
 
     configure_macos_window()
 
     clock = pygame.time.Clock()
+    # Pet bookkeeping uses local (0..SW, 0..SH) coordinates; we translate to
+    # global screen coords when moving the window.
     pet = Pet(SW, SH)
 
     frame_count = 0
@@ -410,11 +470,15 @@ def main():
                     pygame.quit(); sys.exit()
 
         pet.update()
+
+        # Render sprite into the tiny window
         screen.fill(CLEAR)
         pet.draw(screen)
         pygame.display.flip()
 
-        # Re-assert window level every second so we stay on top
+        # Move the window to follow the pet (translate to global coords)
+        move_window(ox + int(pet.x), oy + int(pet.y))
+
         frame_count += 1
         if frame_count % FPS == 0:
             reassert_window_level()
