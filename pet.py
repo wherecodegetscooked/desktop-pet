@@ -30,7 +30,7 @@ def draw_pet_pixels(px, facing_right, anim_frame, state, blink):
     cart_y. Resulting pygame coords:
       body   x 2..13   y 0..7      (cart y 2..9)
       L arm  x 0..1    y 4..5      (cart y 4..5)
-      R arm  x 14..15  y 3..5      (cart y 4..6)
+      R arm  x 14..15  y 4..5      (cart y 4..6)
       eyes   (4, 2-3) and (11, 2-3)  (cart y 6..7)
       legs   at x 3, 5, 10, 12;  y 8..9 (cart y 0..1)
     """
@@ -50,7 +50,7 @@ def draw_pet_pixels(px, facing_right, anim_frame, state, blink):
 
     # Right arm  (2×3)
     for ax in range(14, 16):
-        for ay in range(3, 6):
+        for ay in range(4, 6):
             px.set_at((ax, ay), C)
 
     # Legs — 1×2 normally, 1×1 when "up" during walk/run.
