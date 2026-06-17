@@ -9,7 +9,11 @@ DIST_DIR="$PROJECT_DIR/dist"
 RELEASE_DIR="$PROJECT_DIR/release"
 APP_PATH="$DIST_DIR/$APP_NAME.app"
 DMG_PATH="$RELEASE_DIR/Desktop-Pet-macOS.dmg"
+ZIP_PATH="$RELEASE_DIR/Desktop-Pet-macOS.zip"
 TARGET_ARCH="${TARGET_ARCH:-}"
+# Build number baked into the bundle (and published as version.txt) so the
+# in-app updater can tell whether a newer build exists. 0 for local builds.
+BUILD_VERSION="${BUILD_VERSION:-0}"
 
 if ! command -v pyinstaller >/dev/null 2>&1; then
   echo "PyInstaller is required to build the macOS app."
@@ -20,6 +24,9 @@ fi
 rm -rf "$BUILD_DIR" "$DIST_DIR" "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
+# Stamp this build's version into a file the app reads at runtime.
+echo "$BUILD_VERSION" > "$PROJECT_DIR/VERSION"
+
 pyinstaller_args=(
   --noconfirm
   --clean
@@ -27,6 +34,7 @@ pyinstaller_args=(
   --name "$APP_NAME"
   --osx-bundle-identifier "$BUNDLE_ID"
   --add-data "$PROJECT_DIR/sprite.png:."
+  --add-data "$PROJECT_DIR/VERSION:."
 )
 
 if [[ -n "$TARGET_ARCH" ]]; then
@@ -50,5 +58,12 @@ hdiutil create \
 
 rm -rf "$STAGING_DIR"
 
+# A zipped .app (preserving the bundle) is what the in-app updater downloads,
+# plus a plain version.txt it checks first.
+/usr/bin/ditto -c -k --keepParent "$APP_PATH" "$ZIP_PATH"
+echo "$BUILD_VERSION" > "$RELEASE_DIR/version.txt"
+
 echo "Built app: $APP_PATH"
 echo "Release DMG: $DMG_PATH"
+echo "Release ZIP: $ZIP_PATH"
+echo "Version: $BUILD_VERSION"

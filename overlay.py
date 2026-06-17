@@ -290,6 +290,10 @@ class MacOverlay:
             menu, "Remove a pet", "r", self.menu_controller, b"removeDup:"
         )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
+        self._add_menu_item(
+            menu, "Check for updates…", "u", self.menu_controller, b"updateApp:"
+        )
+        _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         # Quit hides this primary window; the run loop notices and shuts down.
         self._add_menu_item(menu, "Quit Desktop Pet", "q", self.window, b"orderOut:")
 
@@ -356,6 +360,7 @@ class MacOverlay:
             (b"feedPet:", "feed"),
             (b"recolour:", "recolour"),
             (b"renamePet:", "rename"),
+            (b"updateApp:", "update"),
         ):
             imp = make_imp(action)
             self._menu_imps.append(imp)  # keep callbacks alive

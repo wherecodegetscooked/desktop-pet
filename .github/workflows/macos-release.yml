@@ -3,6 +3,8 @@ name: Build macOS release
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - "v*"
 
@@ -30,20 +32,36 @@ jobs:
           python -m pip install -r requirements.txt pyinstaller
 
       - name: Build app bundle
+        env:
+          # Monotonic build number the in-app updater compares against.
+          BUILD_VERSION: ${{ github.run_number }}
         run: |
           chmod +x build_macos_release.sh
           ./build_macos_release.sh
 
-      - name: Upload release artifact
+      # Rolling "latest" release the app's "Check for updates" pulls from.
+      # version.txt is the tiny file it reads first; the zip is the new bundle.
+      - name: Publish latest build
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: release/Desktop-Pet-macOS.dmg
+          tag_name: latest
+          name: Latest build
+          prerelease: false
+          make_latest: true
+          files: |
+            release/Desktop-Pet-macOS.zip
+            release/Desktop-Pet-macOS.dmg
+            release/version.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+      # Tagged versions (vX.Y.Z) also get their own immutable release.
+      - name: Publish tagged release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/v')
         with:
-          name: Desktop-Pet-macOS
-          path: release/Desktop-Pet-macOS.dmg
+          files: |
+            release/Desktop-Pet-macOS.dmg
+            release/Desktop-Pet-macOS.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

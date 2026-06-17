@@ -54,15 +54,70 @@ python3 -m pip install pyinstaller
 ```
 
 ## Usage
-For local development, run the pet with:
+
+### Simple loop (recommended): run from source
+The fastest way to run the latest version is straight from this repo — no build,
+no download, and **no Gatekeeper "allow" step** (that prompt only appears for the
+downloaded, unsigned DMG; locally-run code is never quarantined):
 
 ```bash
-python main.py
+./dev.sh
 ```
 
-For the packaged app, open `Desktop Pet.app`.
+`dev.sh` pulls the latest, makes sure the virtualenv exists, stops any running
+pet, and launches the fresh copy. To update after a change, just run it again.
+Press Ctrl-C to quit.
 
-Behavior and controls live in `pet.py` (logic) and `render.py` (visuals); tweak `config.py` to adjust timings, colours, and phrases.
+It needs no Accessibility or Screen Recording permission — the pet only reads
+window *bounds* and app names, and uses the no-permission idle/keystroke APIs.
+
+### Persistent menu-bar app
+For a pet that autostarts and lives in the menu bar (still built locally, so no
+Gatekeeper prompt), run once:
+
+```bash
+./install_macos_app.sh
+```
+
+That installs `~/Applications/Desktop Pet.app`, which runs `main.py` from this
+repo. To update it later, pull and relaunch (no rebuild needed) — or just run
+`./dev.sh` again.
+
+### Sharing it: a downloadable app that updates itself
+For people who don't want anything to do with the terminal, hand them the
+packaged app — it can update itself from the menu bar.
+
+1. They download `Desktop-Pet-macOS.dmg` from the project's
+   [Releases](https://github.com/wherecodegetscooked/desktop-pet/releases),
+   open it, and drag the app to Applications. Because the download is unsigned,
+   the **first** launch needs the one-time *System Settings → Privacy & Security
+   → Open Anyway* step (right-click → Open also works).
+2. After that, the paw menu has **"Check for updates…"**. It asks GitHub for the
+   newest build; if there's a newer one it pops a *yes/no* dialog, and on "Update
+   now" it downloads the new version, clears its quarantine flag, swaps itself
+   in, and relaunches — **no re-download, no Gatekeeper prompt, no terminal.**
+
+New versions are published automatically: every push to `main` (and every `v*`
+tag) builds the app in GitHub Actions and updates a rolling `latest` release,
+which is what "Check for updates" reads. (The build number is just the Actions
+run number, baked into the bundle as `VERSION`.)
+
+### Developer / power-user install (run from source)
+If you'd rather skip packaging, a source clone updates with a plain `git pull`.
+`setup.sh` installs an autostarting menu-bar app whose **"Check for updates…"**
+does `git pull` + relaunch instead of a download:
+
+```bash
+git clone https://github.com/wherecodegetscooked/desktop-pet.git && cd desktop-pet && ./setup.sh
+```
+
+This needs `git` and Python 3 (the first `git` command makes macOS offer to
+install the Command Line Tools). It needs no Accessibility or Screen Recording
+permission — the pet only reads window *bounds* and app names and uses the
+no-permission idle/keystroke APIs.
+
+Behavior and controls live in `pet.py` (logic) and `render.py` (visuals); tweak
+`config.py` to adjust timings, colours, and phrases.
 
 ## Development
 - Tweak constants in `config.py`, behaviour in `pet.py`, and visuals in `render.py`.

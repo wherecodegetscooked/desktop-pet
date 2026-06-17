@@ -10,12 +10,15 @@ Supports multiple pets: the menu-bar "Breed" item spawns a short-lived child,
 love you; clicking it too often makes it arm itself and chase the cursor.
 """
 
+import os
 import random
 import signal
 import sys
 import time
 
 import pygame
+
+import updater
 
 from ball import Ball
 from config import (
@@ -197,6 +200,9 @@ def main():
     ball_overlay = None
     ball_rest_frames = 0
     ball_despawn_frames = 6 * FPS
+    # Self-update: spawn update.sh, show a bubble briefly, then quit so it can
+    # pull the latest and relaunch. Counts down frames before quitting.
+    pending_update = 0
 
     while running:
         now = time.monotonic()
@@ -261,6 +267,19 @@ def main():
                 pets[0]["pet"].cycle_palette()
             elif action == "rename":
                 pets[0]["pet"].rename()
+            elif action == "update" and not pending_update:
+                proj = os.path.dirname(os.path.abspath(__file__))
+                status = updater.check_for_updates(proj)
+                lead = pets[0]["pet"]
+                if status == "updating":
+                    lead.start_talk("Updating!")
+                    pending_update = 36  # show the bubble, then quit to relaunch
+                elif status == "uptodate":
+                    lead.start_talk("Up to date!")
+                elif status == "declined":
+                    pass
+                else:
+                    lead.start_talk("Update check failed.")
 
         if now - last_window_scan > 0.75:
             display_rects, bounds = primary.refresh_displays()
@@ -349,6 +368,13 @@ def main():
             if ball is not None:
                 ball_overlay.reassert_top()
             last_reassert = now
+
+        # After an update was requested, let the "Updating!" bubble show for a
+        # few frames, then quit; update.sh waits for us to exit and relaunches.
+        if pending_update:
+            pending_update -= 1
+            if pending_update == 0:
+                running = False
 
         clock.tick(FPS)
 
