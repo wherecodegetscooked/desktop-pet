@@ -92,6 +92,16 @@ def render_pet(entry):
     if pet.talking or pet.particles or pet.weapon:
         origin_x = round(pet.x + WINDOW_W / 2 - FX_W / 2)
         origin_y = round(pet.y + WINDOW_H / 2 - FX_H / 2)
+        # Keep the effects window fully on the desktop; otherwise macOS shoves
+        # it back on-screen (notably near the bottom edge), which fights our
+        # per-frame move and makes the bubble flicker.
+        origin_x = max(pet.min_x, min(pet.max_x - FX_W, origin_x))
+        origin_y = max(pet.min_y, min(pet.max_y - FX_H, origin_y))
+        # The pet is centred in the window only when unclamped; derive its
+        # actual offset so the bubble/weapon stay pinned to him after clamping.
+        pet_left = round(pet.x) - origin_x
+        pet_top = round(pet.y) - origin_y
+
         fx_canvas.fill(CLEAR)
 
         for p in pet.particles:
@@ -109,8 +119,6 @@ def render_pet(entry):
             weapon = draw_weapon(pet.weapon)
             if not pet.facing_right:
                 weapon = pygame.transform.flip(weapon, True, False)
-            pet_left = FX_W // 2 - WINDOW_W // 2
-            pet_top = FX_H // 2 - WINDOW_H // 2
             hand_y = pet_top + int(WINDOW_H * 0.45)
             if pet.facing_right:
                 wx = pet_left + WINDOW_W - 8
@@ -129,11 +137,11 @@ def render_pet(entry):
                 pet.speech_surface = surf
                 pet.speech_dirty = False
             surf = pet.speech_surface
-            bx = (FX_W - surf.get_width()) // 2
+            bx = pet_left + (WINDOW_W - surf.get_width()) // 2
             if pet.speech_tail_up:
-                by = round(pet.y + WINDOW_H - origin_y - BUBBLE_GAP)
+                by = pet_top + WINDOW_H - BUBBLE_GAP
             else:
-                by = round(pet.y - origin_y - surf.get_height() + BUBBLE_GAP)
+                by = pet_top - surf.get_height() + BUBBLE_GAP
             fx_canvas.blit(surf, (bx, by))
 
         fx.move(origin_x, origin_y)

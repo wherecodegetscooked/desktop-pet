@@ -319,11 +319,6 @@ class Pet:
             if self.rage_timer <= 0 and self.anger < 1.0:
                 self.rage = False
                 self.weapon = None
-                # He was flying; let gravity reclaim him next frame.
-                self.platform = None
-                self.airborne = True
-                self.state = State.JUMP
-                self.jump_vy = max(0.0, self.jump_vy)
         if self.angry:
             self.angry_timer -= 1
             if self.angry_timer <= 0 and self.anger < 1.0 and not self.rage:
@@ -333,36 +328,58 @@ class Pet:
             if self.loved_timer <= 0 and self.love < 1.0:
                 self.loved = False
 
-    def _update_rage(self, mouse):
-        """Fly straight at the cursor in 2D (ignoring gravity), lashing out
-        with anger particles when he reaches it."""
+    def _update_rage(self, mouse, platforms):
+        """Aggressively pursue the cursor on foot: run toward it, jump up onto
+        windows to climb toward it, and walk off ledges to drop down to it.
+        Respects gravity and platforms — he never flies straight at it."""
         if mouse is None:
-            self.vx = 0.0
-            self.vy = 0.0
-            self.state = State.IDLE
             return
+        if self.airborne or self.state == State.JUMP:
+            return  # let the current jump arc finish
         dx = mouse[0] - self._feet_x()
-        dy = mouse[1] - (self.y + WINDOW_H * 0.5)
-        dist = math.hypot(dx, dy)
-        if dist < 12:
+        if abs(dx) > 8:
+            self.vx = (1 if dx > 0 else -1) * RAGE_CHASE_SPEED
+            self.state = State.RUN
+        else:
             self.vx = 0.0
-            self.vy = 0.0
             self.state = State.IDLE
             if random.random() < 0.2:
                 self.spawn_particles("anger", 1)
-        else:
-            self.vx = RAGE_CHASE_SPEED * dx / dist
-            self.vy = RAGE_CHASE_SPEED * dy / dist
-            self.state = State.RUN
         if self.vx > 0.1:
             self.facing_right = True
         elif self.vx < -0.1:
             self.facing_right = False
         self.state_timer = 30
+        # Climb toward the cursor when it's above him, hopping window to window.
+        if mouse[1] < self.y + WINDOW_H - 40:
+            self._rage_jump(mouse, platforms)
 
-    def _clamp_position(self):
-        self.x = max(self.min_x, min(self.max_x - WINDOW_W, self.x))
-        self.y = max(self.min_y, min(self.max_y - WINDOW_H, self.y))
+    def _rage_jump(self, mouse, platforms):
+        """Jump onto whichever reachable window edge gets him closest to the
+        cursor (used while enraged to scale up toward it)."""
+        if self.jump_cooldown > 0 or self.airborne or self.state == State.JUMP:
+            return
+        foot = self._feet_x()
+        current_y = self.y + WINDOW_H
+        best = None
+        best_score = None
+        for platform in platforms:
+            if platform["name"] == GROUND_PLATFORM_NAME:
+                continue
+            vertical = platform["y"] - current_y
+            if vertical > -20:
+                continue  # not meaningfully higher than where he stands
+            if vertical < -self.screen_h * MAX_TARGET_HEIGHT:
+                continue  # too high to reach
+            center = platform["x"] + platform["w"] * 0.5
+            if abs(center - foot) > self.screen_w * MAX_TARGET_DISTANCE:
+                continue  # too far sideways
+            score = abs(center - mouse[0]) + abs(platform["y"] - mouse[1])
+            if best_score is None or score < best_score:
+                best_score = score
+                best = platform
+        if best:
+            self.start_jump(best)
 
     def _maybe_follow_mouse(self, mouse):
         if self.angry or self.following:
@@ -466,35 +483,30 @@ class Pet:
         self._maybe_idle_fx()
 
         if self.rage:
-            # Armed and furious: fly straight at the cursor, free of gravity and
-            # platforms, until he calms down. Keep the bubble counting down but
-            # never let it root him in place.
+            # Armed and furious: chase the cursor on foot (jumping across
+            # windows), but keep the bubble counting down so it never roots him.
             if self.talking:
                 self.speech_timer -= 1
                 if self.speech_timer <= 0:
                     self._stop_talking(repick=False)
-            self._update_rage(mouse)
-            self.x += self.vx
-            self.y += self.vy
-            self._clamp_position()
-            return
-
-        if self.talking and self._update_talking():
-            return
-
-        if not self.talking and not self.airborne and self.state != State.JUMP:
-            self._maybe_talk()
-            if self.talking:
+            self._update_rage(mouse, platforms)
+        else:
+            if self.talking and self._update_talking():
                 return
 
-        if self.following:
-            self._update_follow(mouse)
-        elif mouse is not None and not self.airborne and self.state != State.JUMP:
-            self._maybe_follow_mouse(mouse)
+            if not self.talking and not self.airborne and self.state != State.JUMP:
+                self._maybe_talk()
+                if self.talking:
+                    return
 
-        if not self.following and not self.airborne and self.state != State.JUMP:
-            if not self._maybe_drop_through_platform():
-                self._maybe_jump_to_window(platforms)
+            if self.following:
+                self._update_follow(mouse)
+            elif mouse is not None and not self.airborne and self.state != State.JUMP:
+                self._maybe_follow_mouse(mouse)
+
+            if not self.following and not self.airborne and self.state != State.JUMP:
+                if not self._maybe_drop_through_platform():
+                    self._maybe_jump_to_window(platforms)
 
         if self.airborne or self.state == State.JUMP:
             self.jump_vy += GRAVITY
@@ -530,9 +542,10 @@ class Pet:
             self.platform = self._ground_under_feet(platforms)
             if self.state == State.JUMP:
                 self.jump_cooldown = 30
-                self.pick_state()
+                if not self.rage:
+                    self.pick_state()
 
-        if self.state_timer <= 0 and not self.airborne:
+        if self.state_timer <= 0 and not self.airborne and not self.rage:
             self.pick_state()
 
     def _update_face(self):
@@ -682,7 +695,10 @@ class Pet:
         self.airborne = False
         self.jump_target = None
         self.jump_cooldown = 30
-        self.pick_state()
+        if self.rage:
+            self.state = State.IDLE
+        else:
+            self.pick_state()
 
     def _maybe_jump_to_window(self, platforms):
         if self.jump_cooldown > 0:
