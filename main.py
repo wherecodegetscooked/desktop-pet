@@ -212,13 +212,15 @@ def main():
                     entry["pet"].sync_platforms(platforms)
             last_window_scan = now
 
-        # Drag: stick to whichever pet the gesture grabbed until released.
-        if drag["dragging"] and drag_target is None and drag["position"]:
-            drag_target = pet_under_point(pets, mouse) or pets[0]
-        if drag_target and drag["moved"] and drag["position"]:
-            drag_target["pet"].drag_to(*drag["position"])
-        if drag["released"]:
-            if drag_target and drag["moved"]:
+        # Drag: only a gesture that actually moved counts as a drag, so a plain
+        # click never sticks a pet as the drag target (which would freeze it).
+        if drag["dragging"] and drag["moved"]:
+            if drag_target is None and drag["position"]:
+                drag_target = pet_under_point(pets, mouse) or pets[0]
+            if drag_target and drag["position"]:
+                drag_target["pet"].drag_to(*drag["position"])
+        elif not drag["dragging"]:
+            if drag_target and drag["released"] and drag["moved"]:
                 drag_target["pet"].drop()
             drag_target = None
 

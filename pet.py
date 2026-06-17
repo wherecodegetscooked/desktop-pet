@@ -319,6 +319,11 @@ class Pet:
             if self.rage_timer <= 0 and self.anger < 1.0:
                 self.rage = False
                 self.weapon = None
+                # He was flying; let gravity reclaim him next frame.
+                self.platform = None
+                self.airborne = True
+                self.state = State.JUMP
+                self.jump_vy = max(0.0, self.jump_vy)
         if self.angry:
             self.angry_timer -= 1
             if self.angry_timer <= 0 and self.anger < 1.0 and not self.rage:
@@ -329,22 +334,35 @@ class Pet:
                 self.loved = False
 
     def _update_rage(self, mouse):
-        """Charge horizontally at the cursor, lashing out when close."""
+        """Fly straight at the cursor in 2D (ignoring gravity), lashing out
+        with anger particles when he reaches it."""
         if mouse is None:
-            self.vx *= 0.8
+            self.vx = 0.0
+            self.vy = 0.0
             self.state = State.IDLE
             return
         dx = mouse[0] - self._feet_x()
-        if abs(dx) > 8:
-            direction = 1 if dx > 0 else -1
-            self.vx = direction * RAGE_CHASE_SPEED
-            self.state = State.RUN
-        else:
+        dy = mouse[1] - (self.y + WINDOW_H * 0.5)
+        dist = math.hypot(dx, dy)
+        if dist < 12:
             self.vx = 0.0
+            self.vy = 0.0
             self.state = State.IDLE
             if random.random() < 0.2:
                 self.spawn_particles("anger", 1)
+        else:
+            self.vx = RAGE_CHASE_SPEED * dx / dist
+            self.vy = RAGE_CHASE_SPEED * dy / dist
+            self.state = State.RUN
+        if self.vx > 0.1:
+            self.facing_right = True
+        elif self.vx < -0.1:
+            self.facing_right = False
         self.state_timer = 30
+
+    def _clamp_position(self):
+        self.x = max(self.min_x, min(self.max_x - WINDOW_W, self.x))
+        self.y = max(self.min_y, min(self.max_y - WINDOW_H, self.y))
 
     def _maybe_follow_mouse(self, mouse):
         if self.angry or self.following:
@@ -448,31 +466,35 @@ class Pet:
         self._maybe_idle_fx()
 
         if self.rage:
-            # Armed and furious: keep the speech bubble counting down but never
-            # let it root him in place — he chases the cursor instead.
+            # Armed and furious: fly straight at the cursor, free of gravity and
+            # platforms, until he calms down. Keep the bubble counting down but
+            # never let it root him in place.
             if self.talking:
                 self.speech_timer -= 1
                 if self.speech_timer <= 0:
                     self._stop_talking(repick=False)
-            if not self.airborne and self.state != State.JUMP:
-                self._update_rage(mouse)
-        else:
-            if self.talking and self._update_talking():
+            self._update_rage(mouse)
+            self.x += self.vx
+            self.y += self.vy
+            self._clamp_position()
+            return
+
+        if self.talking and self._update_talking():
+            return
+
+        if not self.talking and not self.airborne and self.state != State.JUMP:
+            self._maybe_talk()
+            if self.talking:
                 return
 
-            if not self.talking and not self.airborne and self.state != State.JUMP:
-                self._maybe_talk()
-                if self.talking:
-                    return
+        if self.following:
+            self._update_follow(mouse)
+        elif mouse is not None and not self.airborne and self.state != State.JUMP:
+            self._maybe_follow_mouse(mouse)
 
-            if self.following:
-                self._update_follow(mouse)
-            elif mouse is not None and not self.airborne and self.state != State.JUMP:
-                self._maybe_follow_mouse(mouse)
-
-            if not self.following and not self.airborne and self.state != State.JUMP:
-                if not self._maybe_drop_through_platform():
-                    self._maybe_jump_to_window(platforms)
+        if not self.following and not self.airborne and self.state != State.JUMP:
+            if not self._maybe_drop_through_platform():
+                self._maybe_jump_to_window(platforms)
 
         if self.airborne or self.state == State.JUMP:
             self.jump_vy += GRAVITY
