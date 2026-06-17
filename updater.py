@@ -15,7 +15,6 @@ import shlex
 import subprocess
 import sys
 import tempfile
-import urllib.request
 
 # owner/repo whose GitHub Releases host the builds.
 UPDATE_REPO = "wherecodegetscooked/desktop-pet"
@@ -45,9 +44,19 @@ def current_version():
         return 0
 
 
-def _latest_version(timeout=5):
-    with urllib.request.urlopen(VERSION_URL, timeout=timeout) as response:
-        return int(response.read().decode().strip())
+def _latest_version(timeout=8):
+    # Fetch with the system curl rather than urllib: the packaged app's bundled
+    # Python has no CA bundle, so HTTPS via urllib fails certificate verification.
+    # curl uses macOS's trust store and always works.
+    result = subprocess.run(
+        ["/usr/bin/curl", "-fsSL", "--max-time", str(timeout), VERSION_URL],
+        capture_output=True,
+        text=True,
+        timeout=timeout + 5,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"curl exited {result.returncode}")
+    return int(result.stdout.strip())
 
 
 def _bundle_path():
