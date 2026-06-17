@@ -14,7 +14,7 @@ from config import (
     ANGRY_DURATION,
     ANGRY_PHRASES,
     ANGRY_THRESHOLD,
-    BORED_FRAMES,
+    BORED_SECONDS,
     BORED_PHRASES,
     EXCITED_FX_CHANCE,
     EXCITED_HOLD,
@@ -144,9 +144,6 @@ class Pet:
         self.idle_seconds = 0.0
         self.typing_rate = 0.0
         self.excited_hold = 0
-        # Start as if he was just active, so he wakes up neutral rather than
-        # immediately bored on launch.
-        self.frames_since_key = 0
         self.zzz_timer = random.randint(ZZZ_INTERVAL_MIN, ZZZ_INTERVAL_MAX)
         # Pomodoro: focusing pets settle down and "work" alongside you.
         self.focusing = False
@@ -315,10 +312,6 @@ class Pet:
         # stable instead of flipping on every letter.
         instant_rate = keys * FPS
         self.typing_rate += (instant_rate - self.typing_rate) * TYPING_RATE_SMOOTHING
-        if keys > 0:
-            self.frames_since_key = 0
-        else:
-            self.frames_since_key += 1
         self.excited_hold = max(0, self.excited_hold - 1)
 
         calm = not self.rage and not self.angry
@@ -356,11 +349,13 @@ class Pet:
         elif self.excited and self.typing_rate < EXCITED_OFF and self.excited_hold == 0:
             self.excited = False
 
+        # Bored only when there's truly no input (no typing, no cursor movement,
+        # no clicks) for a while — any activity makes him neutral again. Past
+        # AFK_SLEEP_SECONDS he's asleep instead.
         self.bored = (
             not self.excited
             and calm
-            and idle_seconds < AFK_SLEEP_SECONDS
-            and self.frames_since_key >= BORED_FRAMES
+            and BORED_SECONDS <= idle_seconds < AFK_SLEEP_SECONDS
         )
 
     def _update_sleep(self, platforms):

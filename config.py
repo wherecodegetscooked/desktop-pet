@@ -145,8 +145,7 @@ EXCITED_OFF = 2.0                    # Drops back below this (plus the hold) to 
 EXCITED_HOLD = 90                    # Frames he stays excited after the last fast typing.
 EXCITED_HOP_CHANCE = 0.02            # Per-frame chance to bounce while excited.
 EXCITED_FX_CHANCE = 0.04             # Per-frame chance to sparkle while excited.
-BORED_SECONDS = 30                   # Present but not typing this long -> bored.
-BORED_FRAMES = BORED_SECONDS * FPS
+BORED_SECONDS = 30                   # No input at all this long (but < AFK) -> bored.
 
 # Pomodoro focus ------------------------------------------------------------
 # "Start Focus" in the menu bar makes every pet settle down and work alongside
