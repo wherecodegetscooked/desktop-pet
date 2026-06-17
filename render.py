@@ -367,23 +367,23 @@ def draw_pet_frame(pet):
     left_eye_x = 7 + pet.look_offset
     right_eye_x = 12 + pet.look_offset
     if pet.asleep:
-        # Closed, content sleeping eyes.
-        rect(small, left_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
-        rect(small, right_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
+        # Closed, peaceful eyes: soft downward curls (distinct from loved's arch).
+        for ex in (left_eye_x, right_eye_x):
+            px(small, ex - 1, eye_y, EYE_COLOR)
+            px(small, ex, eye_y + 1, EYE_COLOR)
+            px(small, ex + 1, eye_y, EYE_COLOR)
     elif pet.excited:
-        # Wide, sparkly eyes.
-        rect(small, left_eye_x, eye_y, 1, 3, EYE_COLOR)
-        rect(small, right_eye_x, eye_y, 1, 3, EYE_COLOR)
+        # Big, bright wide-open eyes with a catchlight sparkle.
+        rect(small, left_eye_x, eye_y, 2, 2, EYE_COLOR)
+        rect(small, right_eye_x - 1, eye_y, 2, 2, EYE_COLOR)
         px(small, left_eye_x, eye_y, HIGHLIGHT)
-        px(small, right_eye_x, eye_y, HIGHLIGHT)
-        px(small, left_eye_x + 1, eye_y - 1, HIGHLIGHT)
-        px(small, right_eye_x + 1, eye_y - 1, HIGHLIGHT)
+        px(small, right_eye_x - 1, eye_y, HIGHLIGHT)
     elif pet.bored:
-        # Heavy-lidded, half-asleep eyes.
+        # Droopy, half-lidded eyes peering down (symmetric, looking inward).
         rect(small, left_eye_x, eye_y, 2, 1, EYE_COLOR)
-        rect(small, right_eye_x, eye_y, 2, 1, EYE_COLOR)
-        px(small, left_eye_x, eye_y + 1, EYE_COLOR)
-        px(small, right_eye_x + 1, eye_y + 1, EYE_COLOR)
+        rect(small, right_eye_x - 1, eye_y, 2, 1, EYE_COLOR)
+        px(small, left_eye_x + 1, eye_y + 1, EYE_COLOR)
+        px(small, right_eye_x - 1, eye_y + 1, EYE_COLOR)
     elif pet.loved and not pet.angry:
         # Smitten: happy upward-arc eyes and rosy cheeks.
         for ex in (left_eye_x, right_eye_x):
