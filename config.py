@@ -16,6 +16,7 @@ PET_COLOR = (236, 145, 92, 255)
 PET_SHADE = (195, 92, 72, 255)
 BELLY_COLOR = (255, 198, 139, 255)
 EYE_COLOR = (26, 20, 18, 255)
+EYE_WHITE = (245, 246, 248, 255)
 HIGHLIGHT = (255, 221, 176, 255)
 CLEAR = (0, 0, 0, 0)
 
@@ -57,6 +58,11 @@ MAX_TARGET_JUMP_SPEED_X = 6.0        # Horizontal speed cap for long jumps.
 MAX_TARGET_DISTANCE = 0.3           # Fraction of screen width considered reachable.
 MAX_TARGET_HEIGHT = 1.5              # Fraction of screen height considered reachable.
 MIN_PLATFORM_Y = 0                   # Allows high ledges where pet stands off-screen.
+# How close (px) the pet's centre may get to a window edge while just pacing on
+# it. He turns around here instead of teetering off, which stops him jittering
+# or getting stuck in window corners. Deliberate exits (drop-through, window
+# jumps) ignore this.
+PLATFORM_EDGE_MARGIN = 8
 
 # Speech tuning -------------------------------------------------------------
 SPEAK_CHANCE = 0.012                  # Per-frame chance to start talking (off cooldown).
@@ -129,12 +135,17 @@ ZZZ_INTERVAL_MIN = 40                # Frames between sleepy "Z" puffs.
 ZZZ_INTERVAL_MAX = 80
 
 # Typing energy -------------------------------------------------------------
-# The pet reads your global keydown rate. Type fast and he gets excited and
-# bouncy; sit at the keyboard fidgeting without typing and he gets bored.
-EXCITED_RATE = 5.0                   # Smoothed keys/sec that flips him to excited.
+# The pet reads your global keydown rate. Type steadily and he warms up into an
+# excited, bouncy mood; sit at the keyboard without typing and he gets bored.
+# Hysteresis (separate on/off thresholds), gentle smoothing, and a hold timer
+# keep him from flipping moods on every single keystroke.
+TYPING_RATE_SMOOTHING = 0.04         # EMA weight for new keystrokes (lower = calmer).
+EXCITED_ON = 4.5                     # Sustained keys/sec needed to get excited (warmup).
+EXCITED_OFF = 2.0                    # Drops back below this (plus the hold) to calm down.
+EXCITED_HOLD = 90                    # Frames he stays excited after the last fast typing.
 EXCITED_HOP_CHANCE = 0.02            # Per-frame chance to bounce while excited.
 EXCITED_FX_CHANCE = 0.04             # Per-frame chance to sparkle while excited.
-BORED_SECONDS = 18                   # Present but not typing this long -> bored.
+BORED_SECONDS = 30                   # Present but not typing this long -> bored.
 BORED_FRAMES = BORED_SECONDS * FPS
 
 # Pomodoro focus ------------------------------------------------------------
@@ -152,6 +163,11 @@ THROW_FRICTION = 0.7                 # Horizontal speed kept per floor bounce.
 THROW_AIR_FRICTION = 0.992           # Horizontal damping while airborne.
 THROW_REST_SPEED = 1.8               # Below this on a bounce he settles and stands.
 TUMBLE_SPIN_SCALE = 2.2              # Degrees of spin per unit of horizontal speed.
+# Once he stops bouncing he may be lying on his side or back; a damped angular
+# spring rights him with a little wobble instead of snapping upright instantly.
+RIGHT_STIFFNESS = 0.05               # Pull back toward upright (higher = snappier).
+RIGHT_DAMPING = 0.82                 # Angular velocity retained per frame.
+RIGHT_SETTLE = 1.5                   # Degrees / deg-per-frame below which he's up.
 
 # Weapon pixel art ----------------------------------------------------------
 WEAPON_SCALE = 3

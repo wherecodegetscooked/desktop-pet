@@ -17,6 +17,7 @@ from config import (
     CLEAR,
     DUST_COLOR,
     EYE_COLOR,
+    EYE_WHITE,
     GUARD_COLOR,
     GUN_COLOR,
     GUN_GRIP_COLOR,
@@ -373,17 +374,18 @@ def draw_pet_frame(pet):
             px(small, ex, eye_y + 1, EYE_COLOR)
             px(small, ex + 1, eye_y, EYE_COLOR)
     elif pet.excited:
-        # Big, bright wide-open eyes with a catchlight sparkle.
-        rect(small, left_eye_x, eye_y, 2, 2, EYE_COLOR)
-        rect(small, right_eye_x - 1, eye_y, 2, 2, EYE_COLOR)
-        px(small, left_eye_x, eye_y, HIGHLIGHT)
-        px(small, right_eye_x - 1, eye_y, HIGHLIGHT)
+        # Big, bright wide-open eyes: white sclera, round pupil, sparkly glint.
+        for cx in (7, 12):
+            rect(small, cx - 1, eye_y - 1, 3, 3, EYE_WHITE)
+            rect(small, cx, eye_y, 1, 2, EYE_COLOR)
+            px(small, cx, eye_y, HIGHLIGHT)
     elif pet.bored:
-        # Droopy, half-lidded eyes peering down (symmetric, looking inward).
-        rect(small, left_eye_x, eye_y, 2, 1, EYE_COLOR)
-        rect(small, right_eye_x - 1, eye_y, 2, 1, EYE_COLOR)
-        px(small, left_eye_x + 1, eye_y + 1, EYE_COLOR)
-        px(small, right_eye_x - 1, eye_y + 1, EYE_COLOR)
+        # Sleepy, half-lidded eyes: white showing under a heavy lid so he looks
+        # tired and unimpressed rather than like a creepy black-eyed glare.
+        for cx in (7, 12):
+            rect(small, cx - 1, eye_y, 3, 2, EYE_WHITE)
+            rect(small, cx - 1, eye_y, 3, 1, EYE_COLOR)
+            px(small, cx, eye_y + 1, EYE_COLOR)
     elif pet.loved and not pet.angry:
         # Smitten: happy upward-arc eyes and rosy cheeks.
         for ex in (left_eye_x, right_eye_x):
@@ -396,17 +398,22 @@ def draw_pet_frame(pet):
         rect(small, left_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
         rect(small, right_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
     else:
-        rect(small, left_eye_x, eye_y, 1, 2, EYE_COLOR)
-        rect(small, right_eye_x, eye_y, 1, 2, EYE_COLOR)
-        px(small, left_eye_x, eye_y, HIGHLIGHT)
-        px(small, right_eye_x, eye_y, HIGHLIGHT)
+        # Normal: white sclera with a dark pupil that glances with look_offset,
+        # plus a cream glint so the eyes read as friendly rather than two dots.
+        look = max(-1, min(1, pet.look_offset))
+        for cx in (7, 12):
+            rect(small, cx - 1, eye_y, 3, 2, EYE_WHITE)
+            pupil_x = max(cx - 1, min(cx + 1, cx + look))
+            rect(small, pupil_x, eye_y, 1, 2, EYE_COLOR)
+            px(small, pupil_x, eye_y, HIGHLIGHT)
 
     if pet.angry:
-        # Slanted brows (high on the outside, low toward the nose).
-        px(small, left_eye_x - 1, eye_y - 2, EYE_COLOR)
-        px(small, left_eye_x, eye_y - 1, EYE_COLOR)
-        px(small, right_eye_x + 1, eye_y - 2, EYE_COLOR)
-        px(small, right_eye_x, eye_y - 1, EYE_COLOR)
+        # Slanted brows (high on the outside, low toward the nose). Anchored to
+        # the fixed eye columns so they sit over the (non-glancing) angry eyes.
+        px(small, 6, eye_y - 2, EYE_COLOR)
+        px(small, 7, eye_y - 1, EYE_COLOR)
+        px(small, 13, eye_y - 2, EYE_COLOR)
+        px(small, 12, eye_y - 1, EYE_COLOR)
 
     mouth_y = body_y + 7
     if pet.asleep:
@@ -453,7 +460,9 @@ def draw_pet_frame(pet):
 
     scaled = pygame.transform.scale(small, (WINDOW_W, WINDOW_H))
 
-    if getattr(pet, "tumbling", False) and abs(getattr(pet, "angle", 0.0)) > 0.5:
+    if (getattr(pet, "tumbling", False) or getattr(pet, "righting", False)) and abs(
+        getattr(pet, "angle", 0.0)
+    ) > 0.5:
         # Spin while thrown. Rotation grows the surface, so re-center it in the
         # fixed-size window (the corners clip slightly during a fast tumble).
         rotated = pygame.transform.rotate(scaled, pet.angle)

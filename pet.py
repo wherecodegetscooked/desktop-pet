@@ -17,9 +17,11 @@ from config import (
     BORED_FRAMES,
     BORED_PHRASES,
     EXCITED_FX_CHANCE,
+    EXCITED_HOLD,
     EXCITED_HOP_CHANCE,
+    EXCITED_OFF,
+    EXCITED_ON,
     EXCITED_PHRASES,
-    EXCITED_RATE,
     FOCUS_PHRASES,
     FOLLOW_CHANCE,
     FOLLOW_RUN_DISTANCE,
@@ -45,11 +47,15 @@ from config import (
     PET_STROKE_LOVE,
     PHRASES,
     PLATFORM_DROP_CHANCE,
+    PLATFORM_EDGE_MARGIN,
     RAGE_CHASE_SPEED,
     RAGE_DURATION,
     RAGE_PHRASES,
     RAGE_THRESHOLD,
     RANDOM_JUMP_STATE_CHANCE,
+    RIGHT_DAMPING,
+    RIGHT_SETTLE,
+    RIGHT_STIFFNESS,
     SPEAK_CHANCE,
     SPEAK_COOLDOWN_MAX,
     SPEAK_COOLDOWN_MIN,
@@ -58,6 +64,7 @@ from config import (
     STROKE_MAX_SPEED,
     STROKE_MIN_SPEED,
     TARGET_JUMP_EXTRA_HEIGHT,
+    TYPING_RATE_SMOOTHING,
     TARGET_JUMP_POWER_MIN,
     THROW_AIR_FRICTION,
     THROW_FRICTION,
@@ -136,14 +143,19 @@ class Pet:
         self.bored = False
         self.idle_seconds = 0.0
         self.typing_rate = 0.0
-        self.frames_since_key = BORED_FRAMES
+        self.excited_hold = 0
+        # Start as if he was just active, so he wakes up neutral rather than
+        # immediately bored on launch.
+        self.frames_since_key = 0
         self.zzz_timer = random.randint(ZZZ_INTERVAL_MIN, ZZZ_INTERVAL_MAX)
         # Pomodoro: focusing pets settle down and "work" alongside you.
         self.focusing = False
-        # Throwing: a flicked release sends him tumbling until he settles.
+        # Throwing: a flicked release sends him tumbling, then he rights himself.
         self.tumbling = False
+        self.righting = False
         self.angle = 0.0
         self.spin_speed = 0.0
+        self.right_vel = 0.0
         self._drag_prev = None
         self._throw_vx = 0.0
         self._throw_vy = 0.0
@@ -298,12 +310,16 @@ class Pet:
         is time since any keyboard/mouse event, `keys` is keydowns this frame.
         Drives dozing off (AFK), excitement (fast typing), and boredom."""
         self.idle_seconds = idle_seconds
+        # Smoothed keys/sec. A single keystroke barely nudges this (warmup); it
+        # also coasts down slowly after you stop (cooldown), so the mood is
+        # stable instead of flipping on every letter.
         instant_rate = keys * FPS
-        self.typing_rate = self.typing_rate * 0.85 + instant_rate * 0.15
+        self.typing_rate += (instant_rate - self.typing_rate) * TYPING_RATE_SMOOTHING
         if keys > 0:
             self.frames_since_key = 0
         else:
             self.frames_since_key += 1
+        self.excited_hold = max(0, self.excited_hold - 1)
 
         calm = not self.rage and not self.angry
         want_sleep = (
@@ -326,9 +342,20 @@ class Pet:
         if self.asleep:
             self.excited = False
             self.bored = False
+            self.excited_hold = 0
             return
 
-        self.excited = self.typing_rate >= EXCITED_RATE and calm
+        # Excitement with hysteresis: needs sustained typing to switch on, then
+        # holds for a beat and only drops once typing has clearly trailed off.
+        if not calm:
+            self.excited = False
+            self.excited_hold = 0
+        elif self.typing_rate >= EXCITED_ON:
+            self.excited = True
+            self.excited_hold = EXCITED_HOLD
+        elif self.excited and self.typing_rate < EXCITED_OFF and self.excited_hold == 0:
+            self.excited = False
+
         self.bored = (
             not self.excited
             and calm
@@ -650,6 +677,9 @@ class Pet:
         if self.tumbling:
             self._update_tumble(platforms)
             return
+        if self.righting:
+            self._update_righting(platforms)
+            return
         if self.asleep:
             self._update_sleep(platforms)
             return
@@ -693,6 +723,16 @@ class Pet:
             self.x += self.vx
             self._land_if_possible(platforms)
         else:
+            # On a window ledge, turn back at the edge instead of teetering off
+            # it (which made him jitter and snag in window corners). Ground and
+            # deliberate exits (rage, following, drop-through, jumps) are exempt.
+            if (
+                self.platform is not None
+                and self.platform["name"] != GROUND_PLATFORM_NAME
+                and not self.rage
+                and not self.following
+            ):
+                self._turn_at_ledge_edge()
             self.x += self.vx
             if self.platform and self._feet_inside_platform(self.platform):
                 self.y = self.platform["y"] - WINDOW_H
@@ -790,8 +830,10 @@ class Pet:
         self.platform = None
         self.jump_target = None
         self.tumbling = False
+        self.righting = False
         self.angle = 0.0
         self.spin_speed = 0.0
+        self.right_vel = 0.0
         self.state = State.IDLE
         self.state_timer = 60
         self.following = False
@@ -822,6 +864,9 @@ class Pet:
         self.airborne = True
         self.platform = None
         self.jump_target = None
+        self.tumbling = False
+        self.righting = False
+        self.angle = 0.0
         self.state = State.JUMP
         self.jump_vy = 0.0
         self.jump_cooldown = 30
@@ -869,16 +914,32 @@ class Pet:
                     abs(self.jump_vy) < THROW_REST_SPEED
                     and abs(self.vx) < THROW_REST_SPEED
                 ):
-                    # Out of energy: land, straighten up, resume normal life.
+                    # Out of bounce energy. He may be lying on his side or back,
+                    # so hand off to the righting spring rather than snapping up.
                     self.tumbling = False
-                    self.angle = 0.0
+                    self.righting = True
+                    self.angle = ((self.angle + 180) % 360) - 180
+                    self.right_vel = self.spin_speed * 0.5
                     self.spin_speed = 0.0
                     self.vx = 0.0
                     self.jump_vy = 0.0
                     self.platform = platform
                     self.airborne = False
                     self.jump_cooldown = 20
-                    self.pick_state()
+
+    def _update_righting(self, platforms):
+        """Ease him from however he landed back onto his feet with a damped
+        wobble, instead of flipping upright in a single frame."""
+        if self.platform and self._feet_inside_platform(self.platform):
+            self.y = self.platform["y"] - WINDOW_H
+        self.right_vel += -RIGHT_STIFFNESS * self.angle
+        self.right_vel *= RIGHT_DAMPING
+        self.angle += self.right_vel
+        if abs(self.angle) < RIGHT_SETTLE and abs(self.right_vel) < RIGHT_SETTLE:
+            self.angle = 0.0
+            self.right_vel = 0.0
+            self.righting = False
+            self.pick_state()
 
     def _spawn_dust(self):
         self.spawn_particles("dust", random.randint(2, 3))
@@ -934,7 +995,30 @@ class Pet:
 
     def _feet_inside_platform(self, platform):
         foot = self._feet_x()
-        return platform["x"] + 8 <= foot <= platform["x"] + platform["w"] - 8
+        return (
+            platform["x"] + PLATFORM_EDGE_MARGIN
+            <= foot
+            <= platform["x"] + platform["w"] - PLATFORM_EDGE_MARGIN
+        )
+
+    def _turn_at_ledge_edge(self):
+        """Reverse course just before walking off the current ledge so he paces
+        the window rather than tipping over its corner. No-op on ledges too
+        narrow to stand on (normal falling handles those)."""
+        platform = self.platform
+        left = platform["x"] + PLATFORM_EDGE_MARGIN
+        right = platform["x"] + platform["w"] - PLATFORM_EDGE_MARGIN
+        if right <= left:
+            return
+        next_foot = self._feet_x() + self.vx
+        if next_foot < left:
+            self.x = left - WINDOW_W * 0.5
+            self.vx = max(abs(self.vx), 0.4)
+            self.facing_right = True
+        elif next_foot > right:
+            self.x = right - WINDOW_W * 0.5
+            self.vx = -max(abs(self.vx), 0.4)
+            self.facing_right = False
 
     def _landing_platform(self, platforms):
         previous_feet_y = self.y + WINDOW_H - self.jump_vy
