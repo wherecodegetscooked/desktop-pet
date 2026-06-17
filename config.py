@@ -28,6 +28,11 @@ NS_WINDOW_COLLECTION_FULLSCREEN_AUXILIARY = 1 << 8
 NS_APPLICATION_ACTIVATION_POLICY_ACCESSORY = 1
 NS_STATUS_ITEM_VARIABLE_LENGTH = -1.0
 CG_WINDOW_LEVEL_ASSISTIVE_TECH_HIGH = 20
+# CGEventSource input-activity queries (used for AFK sleep and typing energy).
+# These read HID idle time / keydown counts without needing accessibility perms.
+CG_EVENT_SOURCE_STATE_HID = 1
+CG_ANY_INPUT_EVENT_TYPE = 0xFFFFFFFF
+CG_EVENT_KEY_DOWN = 10
 WINDOW_LIST_ON_SCREEN_ONLY = 1
 WINDOW_LIST_EXCLUDE_DESKTOP = 16
 GROUND_PLATFORM_NAME = "Desktop"
@@ -77,6 +82,8 @@ MAX_PARTICLES = 60
 HEART_COLOR = (255, 95, 130, 255)
 STAR_COLOR = (255, 214, 92, 255)
 ANGER_COLOR = (232, 64, 52, 255)
+ZZZ_COLOR = (150, 170, 210, 255)
+DUST_COLOR = (205, 198, 186, 255)
 
 # Mouse interaction --------------------------------------------------------
 FOLLOW_CHANCE = 0.004                # Per-frame chance to start chasing the cursor.
@@ -112,6 +119,39 @@ LOVE_DECAY = 0.01                    # Love cooled per frame.
 CHILD_LIFESPAN_MIN = 12 * FPS        # Shortest a spawned child sticks around (~12s).
 CHILD_LIFESPAN_MAX = 90 * FPS        # Longest a spawned child sticks around (~90s).
 MAX_PETS = 12                        # Hard cap so breeding can't run away.
+
+# Idle / AFK sleep ----------------------------------------------------------
+# When the whole machine sees no keyboard or mouse for this long, the pet curls
+# up and sleeps (Zzz particles). Any input wakes it. Tune AFK_SLEEP_SECONDS down
+# for a sleepier pet.
+AFK_SLEEP_SECONDS = 90               # Seconds of no input before dozing off.
+ZZZ_INTERVAL_MIN = 40                # Frames between sleepy "Z" puffs.
+ZZZ_INTERVAL_MAX = 80
+
+# Typing energy -------------------------------------------------------------
+# The pet reads your global keydown rate. Type fast and he gets excited and
+# bouncy; sit at the keyboard fidgeting without typing and he gets bored.
+EXCITED_RATE = 5.0                   # Smoothed keys/sec that flips him to excited.
+EXCITED_HOP_CHANCE = 0.02            # Per-frame chance to bounce while excited.
+EXCITED_FX_CHANCE = 0.04             # Per-frame chance to sparkle while excited.
+BORED_SECONDS = 18                   # Present but not typing this long -> bored.
+BORED_FRAMES = BORED_SECONDS * FPS
+
+# Pomodoro focus ------------------------------------------------------------
+# "Start Focus" in the menu bar makes every pet settle down and work alongside
+# you; when the timer runs out they throw a little party.
+FOCUS_MINUTES = 25
+
+# Throwing physics ----------------------------------------------------------
+# Flick-drag the pet and let go: a fast release launches him into a tumbling
+# arc that bounces off the floor, walls, and windows before settling.
+THROW_MIN_SPEED = 6.0                # Release px/frame needed to count as a throw.
+THROW_MAX_SPEED = 26.0               # Cap on launch speed so he can't rocket away.
+THROW_RESTITUTION = 0.55             # Vertical energy kept per bounce.
+THROW_FRICTION = 0.7                 # Horizontal speed kept per floor bounce.
+THROW_AIR_FRICTION = 0.992           # Horizontal damping while airborne.
+THROW_REST_SPEED = 1.8               # Below this on a bounce he settles and stands.
+TUMBLE_SPIN_SCALE = 2.2              # Degrees of spin per unit of horizontal speed.
 
 # Weapon pixel art ----------------------------------------------------------
 WEAPON_SCALE = 3
@@ -223,4 +263,47 @@ RAGE_PHRASES = [
     "Bang bang!",
     "Get back here!",
     "This is your fault!",
+]
+
+EXCITED_PHRASES = [
+    "Wheee!",
+    "Look at you go!",
+    "On fire!",
+    "Productive!",
+    "Nice pace!",
+    "Zoom zoom!",
+    "Keep typing!",
+    "So fast!",
+    "Yes yes yes!",
+    "Unstoppable!",
+    "Flow state!",
+    "Clack clack clack!",
+]
+
+BORED_PHRASES = [
+    "So bored...",
+    "Type something?",
+    "Hello? Work?",
+    "Yawn...",
+    "Let's do stuff!",
+    "I'm bored.",
+    "Tap tap tap?",
+    "Are we working?",
+    "Wake the keyboard!",
+    "Do something!",
+    "Any minute now...",
+    "Still waiting.",
+]
+
+FOCUS_PHRASES = [
+    "Focusing...",
+    "Deep work.",
+    "In the zone.",
+    "Heads down.",
+    "Stay on task.",
+    "Keep at it.",
+    "No distractions.",
+    "We got this.",
+    "Eyes on it.",
+    "Almost there!",
 ]

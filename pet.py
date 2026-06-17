@@ -9,13 +9,22 @@ import math
 import random
 
 from config import (
+    AFK_SLEEP_SECONDS,
     ANGER_DECAY,
     ANGRY_DURATION,
     ANGRY_PHRASES,
     ANGRY_THRESHOLD,
+    BORED_FRAMES,
+    BORED_PHRASES,
+    EXCITED_FX_CHANCE,
+    EXCITED_HOP_CHANCE,
+    EXCITED_PHRASES,
+    EXCITED_RATE,
+    FOCUS_PHRASES,
     FOLLOW_CHANCE,
     FOLLOW_RUN_DISTANCE,
     FOLLOW_STOP_DISTANCE,
+    FPS,
     GRAVITY,
     GROUND_PLATFORM_NAME,
     IDLE_FX_MAX,
@@ -50,10 +59,19 @@ from config import (
     STROKE_MIN_SPEED,
     TARGET_JUMP_EXTRA_HEIGHT,
     TARGET_JUMP_POWER_MIN,
+    THROW_AIR_FRICTION,
+    THROW_FRICTION,
+    THROW_MAX_SPEED,
+    THROW_MIN_SPEED,
+    THROW_REST_SPEED,
+    THROW_RESTITUTION,
+    TUMBLE_SPIN_SCALE,
     WEAPONS,
     WINDOW_H,
     WINDOW_JUMP_CHANCE,
     WINDOW_W,
+    ZZZ_INTERVAL_MAX,
+    ZZZ_INTERVAL_MIN,
 )
 
 
@@ -111,6 +129,24 @@ class Pet:
         self._stroke_dir = 0
         # Breeding: spawned children carry a lifespan (frames); adults stay None.
         self.life = None
+        # Activity-driven energy: sleep when the machine is idle, get excited
+        # when the human types fast, bored when present but not typing.
+        self.asleep = False
+        self.excited = False
+        self.bored = False
+        self.idle_seconds = 0.0
+        self.typing_rate = 0.0
+        self.frames_since_key = BORED_FRAMES
+        self.zzz_timer = random.randint(ZZZ_INTERVAL_MIN, ZZZ_INTERVAL_MAX)
+        # Pomodoro: focusing pets settle down and "work" alongside you.
+        self.focusing = False
+        # Throwing: a flicked release sends him tumbling until he settles.
+        self.tumbling = False
+        self.angle = 0.0
+        self.spin_speed = 0.0
+        self._drag_prev = None
+        self._throw_vx = 0.0
+        self._throw_vy = 0.0
         self.pick_state()
 
     @property
@@ -119,8 +155,14 @@ class Pet:
             return "rage"
         if self.angry:
             return "angry"
+        if self.asleep:
+            return "asleep"
         if self.loved:
             return "love"
+        if self.excited:
+            return "excited"
+        if self.bored:
+            return "bored"
         return "neutral"
 
     def _phrase_pool(self):
@@ -130,6 +172,12 @@ class Pet:
             return ANGRY_PHRASES
         if self.loved:
             return LOVE_PHRASES
+        if self.excited:
+            return EXCITED_PHRASES
+        if self.bored:
+            return BORED_PHRASES
+        if self.focusing:
+            return FOCUS_PHRASES
         return PHRASES
 
     def set_bounds(self, bounds):
@@ -194,14 +242,33 @@ class Pet:
         for _ in range(count):
             if len(self.particles) >= MAX_PARTICLES:
                 break
-            life = random.randint(42, 66)
+            if kind == "zzz":
+                # Sleepy "Z" drifting slowly up and away from the head.
+                life = random.randint(60, 90)
+                ox = random.uniform(-2, 6)
+                oy = random.uniform(-6, -1)
+                vx = random.uniform(0.1, 0.4) * (1 if self.facing_right else -1)
+                vy = random.uniform(-0.7, -0.4)
+            elif kind == "dust":
+                # Puff kicked up at the feet on a bounce.
+                life = random.randint(16, 26)
+                ox = random.uniform(-7, 7)
+                oy = random.uniform(WINDOW_H - 6, WINDOW_H)
+                vx = random.uniform(-1.4, 1.4)
+                vy = random.uniform(-0.7, -0.1)
+            else:
+                life = random.randint(42, 66)
+                ox = random.uniform(-9, 9)
+                oy = random.uniform(-3, 7)
+                vx = random.uniform(-0.7, 0.7)
+                vy = random.uniform(-1.8, -0.9)
             self.particles.append(
                 {
                     "kind": kind,
-                    "x": head_x + random.uniform(-9, 9),
-                    "y": self.y + random.uniform(-3, 7),
-                    "vx": random.uniform(-0.7, 0.7),
-                    "vy": random.uniform(-1.8, -0.9),
+                    "x": head_x + ox,
+                    "y": self.y + oy,
+                    "vx": vx,
+                    "vy": vy,
                     "life": life,
                     "maxlife": life,
                 }
@@ -223,6 +290,92 @@ class Pet:
         self.idle_fx_timer = random.randint(IDLE_FX_MIN, IDLE_FX_MAX)
         if not self.angry and not self.airborne:
             self.spawn_particles(random.choice(["heart", "star"]), 1)
+
+    # -- Activity / energy -------------------------------------------------
+
+    def observe_activity(self, idle_seconds, keys):
+        """Fold in the machine's input activity once per frame: `idle_seconds`
+        is time since any keyboard/mouse event, `keys` is keydowns this frame.
+        Drives dozing off (AFK), excitement (fast typing), and boredom."""
+        self.idle_seconds = idle_seconds
+        instant_rate = keys * FPS
+        self.typing_rate = self.typing_rate * 0.85 + instant_rate * 0.15
+        if keys > 0:
+            self.frames_since_key = 0
+        else:
+            self.frames_since_key += 1
+
+        calm = not self.rage and not self.angry
+        want_sleep = (
+            idle_seconds >= AFK_SLEEP_SECONDS
+            and calm
+            and not self.airborne
+            and not self.tumbling
+        )
+        if want_sleep and not self.asleep:
+            self.asleep = True
+            self.zzz_timer = random.randint(ZZZ_INTERVAL_MIN, ZZZ_INTERVAL_MAX)
+            self.following = False
+            if self.talking:
+                self._stop_talking(repick=False)
+        elif not want_sleep and self.asleep:
+            self.asleep = False
+            self.spawn_particles("star", 1)
+            self.state_timer = random.randint(30, 60)
+
+        if self.asleep:
+            self.excited = False
+            self.bored = False
+            return
+
+        self.excited = self.typing_rate >= EXCITED_RATE and calm
+        self.bored = (
+            not self.excited
+            and calm
+            and idle_seconds < AFK_SLEEP_SECONDS
+            and self.frames_since_key >= BORED_FRAMES
+        )
+
+    def _update_sleep(self, platforms):
+        """Hold still on the current platform and puff out the odd sleepy Z."""
+        self.vx = 0.0
+        self.vy = 0.0
+        self.state = State.IDLE
+        if self.platform and self._feet_inside_platform(self.platform):
+            self.y = self.platform["y"] - WINDOW_H
+        self.zzz_timer -= 1
+        if self.zzz_timer <= 0:
+            self.zzz_timer = random.randint(ZZZ_INTERVAL_MIN, ZZZ_INTERVAL_MAX)
+            self.spawn_particles("zzz", 1)
+
+    def _energy_fx(self):
+        """Bounce and sparkle when excited (skips hops while focusing so he
+        stays seated). Boredom shows through the face and phrases, not effects."""
+        if self.airborne or self.state == State.JUMP or not self.excited:
+            return
+        if (
+            not self.focusing
+            and self.jump_cooldown == 0
+            and self.state in (State.IDLE, State.WALK)
+            and random.random() < EXCITED_HOP_CHANCE
+        ):
+            self.spawn_particles("star", 1)
+            self.start_jump()
+        elif random.random() < EXCITED_FX_CHANCE:
+            self.spawn_particles("star", 1)
+
+    # -- Pomodoro focus ----------------------------------------------------
+
+    def start_focus(self):
+        self.focusing = True
+        self.following = False
+        if not self.airborne and not self.tumbling:
+            self.pick_state()
+
+    def end_focus(self, party=False):
+        self.focusing = False
+        if party and not self.airborne and not self.tumbling:
+            self.spawn_particles(random.choice(["star", "heart"]), 6)
 
     # -- Mouse interaction -------------------------------------------------
 
@@ -415,6 +568,19 @@ class Pet:
         self.state_timer = 30
 
     def pick_state(self):
+        if self.focusing and not self.rage:
+            # Heads-down: mostly sit and work, with the occasional short shuffle.
+            if random.random() < 0.8:
+                self.state = State.IDLE
+                self.vx = 0.0
+                self.vy = 0.0
+                self.state_timer = random.randint(180, 360)
+            else:
+                self.state = State.WALK
+                self.vx = random.choice([-1, 1]) * random.uniform(0.3, 0.7)
+                self.vy = random.uniform(-0.1, 0.1)
+                self.state_timer = random.randint(60, 140)
+            return
         r = random.random()
         if r < 0.50:
             self.state = State.WALK
@@ -480,6 +646,14 @@ class Pet:
         self._update_face()
         self._update_particles()
         self._update_mood()
+
+        if self.tumbling:
+            self._update_tumble(platforms)
+            return
+        if self.asleep:
+            self._update_sleep(platforms)
+            return
+
         self._maybe_idle_fx()
 
         if self.rage:
@@ -499,14 +673,19 @@ class Pet:
                 if self.talking:
                     return
 
-            if self.following:
-                self._update_follow(mouse)
-            elif mouse is not None and not self.airborne and self.state != State.JUMP:
-                self._maybe_follow_mouse(mouse)
+            self._energy_fx()
 
-            if not self.following and not self.airborne and self.state != State.JUMP:
-                if not self._maybe_drop_through_platform():
-                    self._maybe_jump_to_window(platforms)
+            # While focusing he stays put: no cursor-chasing, window hops, or
+            # ledge drops. Excited bounces are likewise suppressed in _energy_fx.
+            if not self.focusing:
+                if self.following:
+                    self._update_follow(mouse)
+                elif mouse is not None and not self.airborne and self.state != State.JUMP:
+                    self._maybe_follow_mouse(mouse)
+
+                if not self.following and not self.airborne and self.state != State.JUMP:
+                    if not self._maybe_drop_through_platform():
+                        self._maybe_jump_to_window(platforms)
 
         if self.airborne or self.state == State.JUMP:
             self.jump_vy += GRAVITY
@@ -596,19 +775,48 @@ class Pet:
         self.jump_vy = max(0.0, self.jump_vy)
 
     def drag_to(self, x, y):
-        self.x = float(x)
-        self.y = float(y)
+        nx, ny = float(x), float(y)
+        # Track how fast he's being dragged so a flick on release becomes a throw.
+        if self._drag_prev is not None:
+            self._throw_vx = nx - self._drag_prev[0]
+            self._throw_vy = ny - self._drag_prev[1]
+        self._drag_prev = (nx, ny)
+        self.x = nx
+        self.y = ny
         self.vx = 0.0
         self.vy = 0.0
         self.jump_vy = 0.0
         self.airborne = False
         self.platform = None
         self.jump_target = None
+        self.tumbling = False
+        self.angle = 0.0
+        self.spin_speed = 0.0
         self.state = State.IDLE
         self.state_timer = 60
         self.following = False
         if self.talking:
             self._stop_talking(repick=False)
+
+    def release(self):
+        """Let go after a drag. A fast flick launches him into a tumbling throw;
+        a gentle let-go just drops him so gravity takes over."""
+        vx, vy = self._throw_vx, self._throw_vy
+        self._drag_prev = None
+        self._throw_vx = 0.0
+        self._throw_vy = 0.0
+        if math.hypot(vx, vy) >= THROW_MIN_SPEED:
+            self.vx = max(-THROW_MAX_SPEED, min(THROW_MAX_SPEED, vx))
+            self.jump_vy = max(-THROW_MAX_SPEED, min(THROW_MAX_SPEED, vy))
+            self.spin_speed = -self.vx * TUMBLE_SPIN_SCALE
+            self.tumbling = True
+            self.airborne = True
+            self.platform = None
+            self.jump_target = None
+            self.state = State.JUMP
+            self.following = False
+        else:
+            self.drop()
 
     def drop(self):
         self.airborne = True
@@ -618,6 +826,62 @@ class Pet:
         self.jump_vy = 0.0
         self.jump_cooldown = 30
         self.following = False
+
+    def _update_tumble(self, platforms):
+        """Ballistic tumble: arc under gravity, spin, and bounce off walls,
+        windows, and the floor with damping until the motion dies and he stands."""
+        self.jump_vy += GRAVITY
+        self.x += self.vx
+        self.y += self.jump_vy
+        self.vx *= THROW_AIR_FRICTION
+        self.angle += self.spin_speed
+        self.spin_speed *= 0.99
+
+        # Side walls: reflect and lose a little energy.
+        if self.x < self.min_x:
+            self.x = self.min_x
+            self.vx = abs(self.vx) * THROW_RESTITUTION
+            self.spin_speed = -self.spin_speed * 0.6
+            self._spawn_dust()
+        elif self.x + WINDOW_W > self.max_x:
+            self.x = self.max_x - WINDOW_W
+            self.vx = -abs(self.vx) * THROW_RESTITUTION
+            self.spin_speed = -self.spin_speed * 0.6
+            self._spawn_dust()
+
+        if self.vx > 0.1:
+            self.facing_right = True
+        elif self.vx < -0.1:
+            self.facing_right = False
+
+        # Floor / window tops: only while descending, so he can arc up freely.
+        if self.jump_vy > 0:
+            platform = self._landing_platform(platforms)
+            if platform is None and self.y + WINDOW_H > self.max_y:
+                platform = self._ground_under_feet(platforms)
+            if platform:
+                self.y = platform["y"] - WINDOW_H
+                self.jump_vy = -self.jump_vy * THROW_RESTITUTION
+                self.vx *= THROW_FRICTION
+                self.spin_speed *= 0.5
+                self._spawn_dust()
+                if (
+                    abs(self.jump_vy) < THROW_REST_SPEED
+                    and abs(self.vx) < THROW_REST_SPEED
+                ):
+                    # Out of energy: land, straighten up, resume normal life.
+                    self.tumbling = False
+                    self.angle = 0.0
+                    self.spin_speed = 0.0
+                    self.vx = 0.0
+                    self.jump_vy = 0.0
+                    self.platform = platform
+                    self.airborne = False
+                    self.jump_cooldown = 20
+                    self.pick_state()
+
+    def _spawn_dust(self):
+        self.spawn_particles("dust", random.randint(2, 3))
 
     def _maybe_drop_through_platform(self):
         if self.jump_cooldown > 0:

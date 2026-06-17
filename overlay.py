@@ -15,6 +15,9 @@ import sys
 import pygame
 
 from config import (
+    CG_ANY_INPUT_EVENT_TYPE,
+    CG_EVENT_KEY_DOWN,
+    CG_EVENT_SOURCE_STATE_HID,
     CG_WINDOW_LEVEL_ASSISTIVE_TECH_HIGH,
     CLICK_MOVE_THRESHOLD,
     MENU_ICON_SIZE,
@@ -119,6 +122,17 @@ class MacOverlay:
             ctypes.c_int,
         ]
         cg.CGImageRelease.argtypes = [ctypes.c_void_p]
+        # Input-activity queries for AFK sleep and typing energy.
+        cg.CGEventSourceSecondsSinceLastEventType.restype = ctypes.c_double
+        cg.CGEventSourceSecondsSinceLastEventType.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+        ]
+        cg.CGEventSourceCounterForEventType.restype = ctypes.c_uint32
+        cg.CGEventSourceCounterForEventType.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+        ]
         return cg
 
     def _create_window(self):
@@ -256,6 +270,13 @@ class MacOverlay:
         _msg(objc, menu, "setAutoenablesItems:", False, argtypes=[ctypes.c_bool])
 
         self._add_menu_item(
+            menu, "Start Focus (25 min)", "f", self.menu_controller, b"startFocus:"
+        )
+        self._add_menu_item(
+            menu, "Stop Focus", "s", self.menu_controller, b"stopFocus:"
+        )
+        _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
+        self._add_menu_item(
             menu, "Breed (new pet)", "b", self.menu_controller, b"breed:"
         )
         self._add_menu_item(
@@ -319,7 +340,12 @@ class MacOverlay:
 
             return imp_type(handler)
 
-        for sel_name, action in ((b"breed:", "breed"), (b"removeDup:", "remove")):
+        for sel_name, action in (
+            (b"breed:", "breed"),
+            (b"removeDup:", "remove"),
+            (b"startFocus:", "focus_start"),
+            (b"stopFocus:", "focus_stop"),
+        ):
             imp = make_imp(action)
             self._menu_imps.append(imp)  # keep callbacks alive
             objc.class_addMethod(
@@ -520,6 +546,24 @@ class MacOverlay:
                 self.pending_clicks += 1
             return True
         return False
+
+    def seconds_since_input(self):
+        """Seconds since the last keyboard or mouse event, system-wide. Used to
+        decide when the pet should doze off. Needs no accessibility permission."""
+        return float(
+            self.cg.CGEventSourceSecondsSinceLastEventType(
+                CG_EVENT_SOURCE_STATE_HID, CG_ANY_INPUT_EVENT_TYPE
+            )
+        )
+
+    def keydown_count(self):
+        """Cumulative count of keydown events for this login session. Polled each
+        frame; the per-frame delta is how fast the human is typing."""
+        return int(
+            self.cg.CGEventSourceCounterForEventType(
+                CG_EVENT_SOURCE_STATE_HID, CG_EVENT_KEY_DOWN
+            )
+        )
 
     def mouse_position(self):
         """Current cursor location in global CG coordinates (top-left origin)."""

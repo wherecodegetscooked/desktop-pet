@@ -15,6 +15,7 @@ from config import (
     BUBBLE_SCALE,
     BUBBLE_TEXT_COLOR,
     CLEAR,
+    DUST_COLOR,
     EYE_COLOR,
     GUARD_COLOR,
     GUN_COLOR,
@@ -32,6 +33,7 @@ from config import (
     WEAPON_SCALE,
     WINDOW_H,
     WINDOW_W,
+    ZZZ_COLOR,
 )
 from pet import State
 
@@ -231,10 +233,24 @@ STAR_PIXELS = [
     " ## ## ",
     "##   ##",
 ]
+ZZZ_PIXELS = [
+    "#####",
+    "   # ",
+    "  #  ",
+    " #   ",
+    "#####",
+]
+DUST_PIXELS = [
+    " ## ",
+    "####",
+    " ## ",
+]
 PARTICLE_PIXELS = {
     "heart": (HEART_PIXELS, HEART_COLOR),
     "star": (STAR_PIXELS, STAR_COLOR),
     "anger": (STAR_PIXELS, ANGER_COLOR),
+    "zzz": (ZZZ_PIXELS, ZZZ_COLOR),
+    "dust": (DUST_PIXELS, DUST_COLOR),
 }
 _PARTICLE_CACHE = {}
 
@@ -350,7 +366,25 @@ def draw_pet_frame(pet):
     eye_y = body_y + 4
     left_eye_x = 7 + pet.look_offset
     right_eye_x = 12 + pet.look_offset
-    if pet.loved and not pet.angry:
+    if pet.asleep:
+        # Closed, content sleeping eyes.
+        rect(small, left_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
+        rect(small, right_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
+    elif pet.excited:
+        # Wide, sparkly eyes.
+        rect(small, left_eye_x, eye_y, 1, 3, EYE_COLOR)
+        rect(small, right_eye_x, eye_y, 1, 3, EYE_COLOR)
+        px(small, left_eye_x, eye_y, HIGHLIGHT)
+        px(small, right_eye_x, eye_y, HIGHLIGHT)
+        px(small, left_eye_x + 1, eye_y - 1, HIGHLIGHT)
+        px(small, right_eye_x + 1, eye_y - 1, HIGHLIGHT)
+    elif pet.bored:
+        # Heavy-lidded, half-asleep eyes.
+        rect(small, left_eye_x, eye_y, 2, 1, EYE_COLOR)
+        rect(small, right_eye_x, eye_y, 2, 1, EYE_COLOR)
+        px(small, left_eye_x, eye_y + 1, EYE_COLOR)
+        px(small, right_eye_x + 1, eye_y + 1, EYE_COLOR)
+    elif pet.loved and not pet.angry:
         # Smitten: happy upward-arc eyes and rosy cheeks.
         for ex in (left_eye_x, right_eye_x):
             px(small, ex - 1, eye_y + 1, EYE_COLOR)
@@ -375,13 +409,29 @@ def draw_pet_frame(pet):
         px(small, right_eye_x, eye_y - 1, EYE_COLOR)
 
     mouth_y = body_y + 7
-    if pet.angry:
+    if pet.asleep:
+        # Small open sleeping mouth.
+        px(small, 10, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
+    elif pet.angry:
         # Downturned frown.
         px(small, 8, mouth_y + 1, EYE_COLOR)
         px(small, 9, mouth_y, EYE_COLOR)
         px(small, 10, mouth_y, EYE_COLOR)
         px(small, 11, mouth_y, EYE_COLOR)
         px(small, 12, mouth_y + 1, EYE_COLOR)
+    elif pet.excited:
+        # Big open grin.
+        px(small, 8, mouth_y, EYE_COLOR)
+        px(small, 9, mouth_y + 1, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
+        px(small, 11, mouth_y + 1, EYE_COLOR)
+        px(small, 12, mouth_y, EYE_COLOR)
+    elif pet.bored:
+        # Flat, unimpressed line.
+        px(small, 9, mouth_y + 1, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
+        px(small, 11, mouth_y + 1, EYE_COLOR)
     elif pet.loved:
         # Upturned smile.
         px(small, 8, mouth_y, EYE_COLOR)
@@ -401,4 +451,21 @@ def draw_pet_frame(pet):
     if not pet.facing_right:
         small = pygame.transform.flip(small, True, False)
 
-    return pygame.transform.scale(small, (WINDOW_W, WINDOW_H))
+    scaled = pygame.transform.scale(small, (WINDOW_W, WINDOW_H))
+
+    if getattr(pet, "tumbling", False) and abs(getattr(pet, "angle", 0.0)) > 0.5:
+        # Spin while thrown. Rotation grows the surface, so re-center it in the
+        # fixed-size window (the corners clip slightly during a fast tumble).
+        rotated = pygame.transform.rotate(scaled, pet.angle)
+        canvas = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
+        canvas.fill(CLEAR)
+        canvas.blit(
+            rotated,
+            (
+                (WINDOW_W - rotated.get_width()) // 2,
+                (WINDOW_H - rotated.get_height()) // 2,
+            ),
+        )
+        return canvas
+
+    return scaled

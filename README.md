@@ -6,6 +6,9 @@ A small desktop companion application implemented in Python that shows a cute vi
 - Runnable pet implementation, split into focused modules (entry point: `main.py`).
 - Cross-platform Python compatibility (tested on macOS).
 - Simple configuration and easy extension points for animations, actions, and triggers.
+- Reacts to you: dozes off when you're away (AFK), gets excited and bouncy when you type fast, and bored when you sit at the keyboard without typing.
+- Pomodoro buddy: "Start Focus (25 min)" in the menu bar makes every pet settle down and work alongside you, then throw a little party when the timer ends.
+- Throwable: flick-drag the pet and let go to launch it into a tumbling arc that bounces off the floor, walls, and windows before settling.
 
 ### Project layout
 - `main.py` — entry point and main loop.

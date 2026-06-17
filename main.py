@@ -22,6 +22,7 @@ from config import (
     CHILD_LIFESPAN_MAX,
     CHILD_LIFESPAN_MIN,
     CLEAR,
+    FOCUS_MINUTES,
     FPS,
     FX_H,
     FX_W,
@@ -179,6 +180,10 @@ def main():
     last_reassert = 0.0
     last_window_scan = 0.0
     drag_target = None
+    last_key_count = None
+    focus_active = False
+    focus_frames_left = 0
+    focus_total_frames = FOCUS_MINUTES * 60 * FPS
 
     while running:
         now = time.monotonic()
@@ -189,6 +194,12 @@ def main():
 
         drag = primary.consume_drag_state()
         mouse = primary.mouse_position()
+
+        # System-wide input activity, shared by every pet this frame.
+        idle_seconds = primary.seconds_since_input()
+        key_count = primary.keydown_count()
+        keys_this_frame = 0 if last_key_count is None else max(0, key_count - last_key_count)
+        last_key_count = key_count
 
         for action in primary.consume_menu_actions():
             if action == "breed" and len(pets) < MAX_PETS:
@@ -202,6 +213,8 @@ def main():
                     child=True,
                 )
                 parent.spawn_particles("heart", 4)
+                if focus_active:
+                    child["pet"].start_focus()
                 pets.append(child)
             elif action == "remove" and len(pets) > 1:
                 removed = pets.pop()
@@ -209,6 +222,16 @@ def main():
                 removed["fx"].close()
                 if removed is drag_target:
                     drag_target = None
+            elif action == "focus_start" and not focus_active:
+                focus_active = True
+                focus_frames_left = focus_total_frames
+                for entry in pets:
+                    entry["pet"].start_focus()
+                pets[0]["pet"].start_talk("Focus time!")
+            elif action == "focus_stop" and focus_active:
+                focus_active = False
+                for entry in pets:
+                    entry["pet"].end_focus()
 
         if now - last_window_scan > 0.75:
             display_rects, bounds = primary.refresh_displays()
@@ -229,7 +252,7 @@ def main():
                 drag_target["pet"].drag_to(*drag["position"])
         elif not drag["dragging"]:
             if drag_target and drag["released"] and drag["moved"]:
-                drag_target["pet"].drop()
+                drag_target["pet"].release()
             drag_target = None
 
         if drag["clicks"]:
@@ -240,9 +263,19 @@ def main():
             pet = entry["pet"]
             if entry is drag_target:
                 continue
+            pet.observe_activity(idle_seconds, keys_this_frame)
             if not drag["dragging"]:
                 pet.observe_cursor(mouse)
             pet.update(platforms, mouse)
+
+        # Pomodoro countdown: when the focus timer elapses, everyone celebrates.
+        if focus_active:
+            focus_frames_left -= 1
+            if focus_frames_left <= 0:
+                focus_active = False
+                for entry in pets:
+                    entry["pet"].end_focus(party=True)
+                pets[0]["pet"].start_talk("Break time!")
 
         # Age out bred children whose lifespan has elapsed.
         survivors = [pets[0]]
