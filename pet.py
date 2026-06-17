@@ -41,6 +41,7 @@ NSEVENT_LEFT_MOUSE_DOWN = 1
 NSEVENT_LEFT_MOUSE_UP = 2
 NSEVENT_LEFT_MOUSE_DRAGGED = 6
 MENU_ICON_SIZE = 18.0
+CLICK_MOVE_THRESHOLD = 5             # Px of motion that turns a click into a drag.
 
 # Jump tuning ---------------------------------------------------------------
 # Increase these to make the pet jump more often or jump higher.
@@ -67,10 +68,44 @@ SPEECH_PER_CHAR = 6                  # Extra frames shown per character of text.
 # Pixel speech bubble dimensions.
 BUBBLE_SCALE = 3                     # Nearest-neighbour upscale for the pixel look.
 BUBBLE_MAX_TEXT_W = 96               # Wrap width in base (pre-scale) pixels.
-BUBBLE_CANVAS_W = 380                # Window canvas, must hold the widest bubble.
-BUBBLE_CANVAS_H = 200
 BUBBLE_TEXT_COLOR = (40, 30, 28, 255)
 BUBBLE_FILL_COLOR = (255, 250, 235, 255)
+BUBBLE_GAP = 8                       # Pixels between the bubble tail tip and the pet.
+
+# Effects overlay (speech bubble + particles) ------------------------------
+# A transparent, click-through window centred on the pet. Big enough to hold a
+# bubble either above or below the pet plus floating particles.
+FX_W = 420
+FX_H = 440
+PARTICLE_SCALE = 3
+MAX_PARTICLES = 60
+HEART_COLOR = (255, 95, 130, 255)
+STAR_COLOR = (255, 214, 92, 255)
+ANGER_COLOR = (232, 64, 52, 255)
+
+# Mouse interaction --------------------------------------------------------
+FOLLOW_CHANCE = 0.004                # Per-frame chance to start chasing the cursor.
+FOLLOW_STOP_DISTANCE = 12            # Stop once this close (px) to the cursor.
+FOLLOW_RUN_DISTANCE = 220            # Run instead of walk when farther than this.
+IDLE_FX_MIN = 360                    # Min frames between spontaneous heart/stars.
+IDLE_FX_MAX = 1080
+
+# Anger ---------------------------------------------------------------------
+ANGRY_THRESHOLD = 3                  # Clicks (before cooling down) that anger the pet.
+ANGRY_DURATION = 240                 # Frames the pet stays grumpy (~4s).
+ANGER_DECAY = 0.015                  # Anger cooled per frame.
+
+ANGRY_PHRASES = [
+    "Hey!",
+    "Stop poking me!",
+    "Quit it!",
+    "Grrr!",
+    "Leave me alone!",
+    "Ouch!",
+    "Cut it out!",
+    "Rude!",
+    "Not a button!",
+]
 
 PHRASES = [
     "Go work!",
@@ -425,6 +460,9 @@ class MacOverlay:
         self.drag_offset = NSPoint(0, 0)
         self.drag_position = None
         self.drag_released = False
+        self.press_origin = None
+        self.press_moved = False
+        self.pending_clicks = 0
         self._seen_visible = False
 
         # Multi-monitor state, populated by refresh_displays().
@@ -770,16 +808,32 @@ class MacOverlay:
                 restype=NSPoint,
             )
             self.drag_position = self._drag_top_left(NSEvent)
+            self.press_origin = self.drag_position
+            self.press_moved = False
             return True
         if event_type == NSEVENT_LEFT_MOUSE_DRAGGED and self.dragging:
             self.drag_position = self._drag_top_left(NSEvent)
+            if self.press_origin:
+                dx = self.drag_position[0] - self.press_origin[0]
+                dy = self.drag_position[1] - self.press_origin[1]
+                if dx * dx + dy * dy > CLICK_MOVE_THRESHOLD ** 2:
+                    self.press_moved = True
             return True
         if event_type == NSEVENT_LEFT_MOUSE_UP and self.dragging:
             self.drag_position = self._drag_top_left(NSEvent)
             self.dragging = False
-            self.drag_released = True
+            if self.press_moved:
+                self.drag_released = True
+            else:
+                self.pending_clicks += 1
             return True
         return False
+
+    def mouse_position(self):
+        """Current cursor location in global CG coordinates (top-left origin)."""
+        NSEvent = self.objc.objc_getClass(b"NSEvent")
+        mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)
+        return (mouse.x, self.main_height - mouse.y)
 
     def _drag_top_left(self, NSEvent):
         mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)
@@ -795,8 +849,11 @@ class MacOverlay:
             "dragging": self.dragging,
             "position": self.drag_position,
             "released": self.drag_released,
+            "moved": self.press_moved,
+            "clicks": self.pending_clicks,
         }
         self.drag_released = False
+        self.pending_clicks = 0
         return state
 
 
@@ -827,6 +884,14 @@ class Pet:
         self.speech_cooldown = random.randint(120, 600)
         self.speech_dirty = False
         self.speech_surface = None
+        self.speech_tail_up = False
+        self.following = False
+        self.follow_timer = 0
+        self.particles = []
+        self.idle_fx_timer = random.randint(IDLE_FX_MIN, IDLE_FX_MAX)
+        self.anger = 0.0
+        self.angry = False
+        self.angry_timer = 0
         self.pick_state()
 
     def set_bounds(self, bounds):
@@ -883,6 +948,103 @@ class Pet:
         self.speech_cooldown = random.randint(SPEAK_COOLDOWN_MIN, SPEAK_COOLDOWN_MAX)
         if repick and not self.airborne:
             self.pick_state()
+
+    # -- Particles ---------------------------------------------------------
+
+    def spawn_particles(self, kind, count):
+        head_x = self.x + WINDOW_W * 0.5
+        for _ in range(count):
+            if len(self.particles) >= MAX_PARTICLES:
+                break
+            life = random.randint(42, 66)
+            self.particles.append(
+                {
+                    "kind": kind,
+                    "x": head_x + random.uniform(-9, 9),
+                    "y": self.y + random.uniform(-3, 7),
+                    "vx": random.uniform(-0.7, 0.7),
+                    "vy": random.uniform(-1.8, -0.9),
+                    "life": life,
+                    "maxlife": life,
+                }
+            )
+
+    def _update_particles(self):
+        for p in self.particles:
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vy"] += 0.02
+            p["life"] -= 1
+        if self.particles:
+            self.particles = [p for p in self.particles if p["life"] > 0]
+
+    def _maybe_idle_fx(self):
+        self.idle_fx_timer -= 1
+        if self.idle_fx_timer > 0:
+            return
+        self.idle_fx_timer = random.randint(IDLE_FX_MIN, IDLE_FX_MAX)
+        if not self.angry and not self.airborne:
+            self.spawn_particles(random.choice(["heart", "star"]), 1)
+
+    # -- Mouse interaction -------------------------------------------------
+
+    def on_click(self, clicks, mouse=None):
+        """React to taps: hearts when calm, anger after a few quick pokes."""
+        for _ in range(clicks):
+            if self.angry:
+                self.spawn_particles("anger", random.randint(2, 3))
+            else:
+                self.spawn_particles("heart", random.randint(1, 2))
+        self.anger += clicks
+        if not self.angry and self.anger >= ANGRY_THRESHOLD:
+            self._become_angry()
+
+    def _become_angry(self):
+        self.angry = True
+        self.angry_timer = ANGRY_DURATION
+        self.following = False
+        self.spawn_particles("anger", 5)
+        self.start_talk(random.choice(ANGRY_PHRASES))
+
+    def _update_anger(self):
+        self.anger = max(0.0, self.anger - ANGER_DECAY)
+        if self.angry:
+            self.angry_timer -= 1
+            if self.angry_timer <= 0 and self.anger < 1.0:
+                self.angry = False
+
+    def _maybe_follow_mouse(self, mouse):
+        if self.angry or self.following:
+            return
+        if self.state not in (State.IDLE, State.WALK):
+            return
+        if abs(mouse[0] - self._feet_x()) < FOLLOW_STOP_DISTANCE * 2:
+            return
+        if random.random() > FOLLOW_CHANCE:
+            return
+        self.following = True
+        self.follow_timer = random.randint(120, 300)
+
+    def _update_follow(self, mouse):
+        if mouse is None or self.airborne or self.angry:
+            self.following = False
+            return
+        self.follow_timer -= 1
+        dx = mouse[0] - self._feet_x()
+        if abs(dx) < FOLLOW_STOP_DISTANCE or self.follow_timer <= 0:
+            reached = abs(dx) < FOLLOW_STOP_DISTANCE + 4
+            self.following = False
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.state_timer = random.randint(40, 90)
+            if reached:
+                self.spawn_particles("heart", 1)
+            return
+        direction = 1 if dx > 0 else -1
+        speed = 2.4 if abs(dx) > FOLLOW_RUN_DISTANCE else 1.0
+        self.vx = direction * speed
+        self.state = State.RUN if speed > 1.6 else State.WALK
+        self.state_timer = 30
 
     def pick_state(self):
         r = random.random()
@@ -942,12 +1104,15 @@ class Pet:
         self.vy = 0.0
         self.state_timer = 240
 
-    def update(self, platforms):
+    def update(self, platforms, mouse=None):
         self.frame += 1
         self.state_timer -= 1
         self.jump_cooldown = max(0, self.jump_cooldown - 1)
         self.speech_cooldown = max(0, self.speech_cooldown - 1)
         self._update_face()
+        self._update_particles()
+        self._update_anger()
+        self._maybe_idle_fx()
 
         if self.talking and self._update_talking():
             return
@@ -957,7 +1122,12 @@ class Pet:
             if self.talking:
                 return
 
-        if not self.airborne and self.state != State.JUMP:
+        if self.following:
+            self._update_follow(mouse)
+        elif mouse is not None and not self.airborne and self.state != State.JUMP:
+            self._maybe_follow_mouse(mouse)
+
+        if not self.following and not self.airborne and self.state != State.JUMP:
             if not self._maybe_drop_through_platform():
                 self._maybe_jump_to_window(platforms)
 
@@ -1058,6 +1228,7 @@ class Pet:
         self.jump_target = None
         self.state = State.IDLE
         self.state_timer = 60
+        self.following = False
         if self.talking:
             self._stop_talking(repick=False)
 
@@ -1068,6 +1239,7 @@ class Pet:
         self.state = State.JUMP
         self.jump_vy = 0.0
         self.jump_cooldown = 30
+        self.following = False
 
     def _maybe_drop_through_platform(self):
         if self.jump_cooldown > 0:
@@ -1288,8 +1460,10 @@ def render_pixel_text(text, color):
     return surface
 
 
-def draw_speech_bubble(text):
-    """Render a pixel speech bubble: cream box, dark border, downward tail."""
+def draw_speech_bubble(text, tail_up=False):
+    """Render a pixel speech bubble: cream box, dark border, and a tail that
+    points down at the pet (default) or up at it (when the pet is near the top
+    of the screen and the bubble sits below it)."""
     lines = _wrap_lines(text, BUBBLE_MAX_TEXT_W)
     rendered = [render_pixel_text(line, BUBBLE_TEXT_COLOR) for line in lines]
     line_h = GLYPH_H + LINE_GAP
@@ -1302,39 +1476,102 @@ def draw_speech_bubble(text):
     tail_w = 8
     body_w = text_w + pad * 2 + border * 2
     body_h = text_h + pad * 2 + border * 2
+    body_top = tail_h if tail_up else 0
     base = pygame.Surface((body_w, body_h + tail_h), pygame.SRCALPHA)
     base.fill(CLEAR)
 
-    pygame.draw.rect(base, BUBBLE_TEXT_COLOR, pygame.Rect(0, 0, body_w, body_h))
+    body = pygame.Rect(0, body_top, body_w, body_h)
+    pygame.draw.rect(base, BUBBLE_TEXT_COLOR, body)
     pygame.draw.rect(
         base,
         BUBBLE_FILL_COLOR,
-        pygame.Rect(border, border, body_w - border * 2, body_h - border * 2),
+        pygame.Rect(border, body_top + border, body_w - border * 2, body_h - border * 2),
     )
     # Trim the four corner pixels for a softly rounded pixel edge.
-    for corner in [(0, 0), (body_w - 1, 0), (0, body_h - 1), (body_w - 1, body_h - 1)]:
+    for corner in [
+        (0, body_top),
+        (body_w - 1, body_top),
+        (0, body_top + body_h - 1),
+        (body_w - 1, body_top + body_h - 1),
+    ]:
         base.set_at(corner, CLEAR)
 
     for i, surface in enumerate(rendered):
         x = border + pad + (text_w - surface.get_width()) // 2
-        base.blit(surface, (x, border + pad + i * line_h))
+        base.blit(surface, (x, body_top + border + pad + i * line_h))
 
-    # Downward tail centred on the bubble, pointing at the pet's head.
     cx = body_w // 2
-    pygame.draw.polygon(
-        base,
-        BUBBLE_TEXT_COLOR,
-        [(cx - tail_w // 2, body_h - 1), (cx + tail_w // 2, body_h - 1), (cx, body_h - 1 + tail_h)],
-    )
-    pygame.draw.polygon(
-        base,
-        BUBBLE_FILL_COLOR,
-        [(cx - tail_w // 2 + 1, body_h - 2), (cx + tail_w // 2 - 1, body_h - 2), (cx, body_h - 3 + tail_h)],
-    )
+    if tail_up:
+        # Tail at the top, apex pointing up.
+        pygame.draw.polygon(
+            base,
+            BUBBLE_TEXT_COLOR,
+            [(cx - tail_w // 2, tail_h), (cx + tail_w // 2, tail_h), (cx, 0)],
+        )
+        pygame.draw.polygon(
+            base,
+            BUBBLE_FILL_COLOR,
+            [(cx - tail_w // 2 + 1, tail_h + 1), (cx + tail_w // 2 - 1, tail_h + 1), (cx, 2)],
+        )
+    else:
+        # Tail at the bottom, apex pointing down.
+        pygame.draw.polygon(
+            base,
+            BUBBLE_TEXT_COLOR,
+            [(cx - tail_w // 2, body_h - 1), (cx + tail_w // 2, body_h - 1), (cx, body_h - 1 + tail_h)],
+        )
+        pygame.draw.polygon(
+            base,
+            BUBBLE_FILL_COLOR,
+            [(cx - tail_w // 2 + 1, body_h - 2), (cx + tail_w // 2 - 1, body_h - 2), (cx, body_h - 3 + tail_h)],
+        )
 
     return pygame.transform.scale(
         base, (base.get_width() * BUBBLE_SCALE, base.get_height() * BUBBLE_SCALE)
     )
+
+
+# Pixel particle sprites, built lazily after pygame is initialised.
+HEART_PIXELS = [
+    " ## ## ",
+    "#######",
+    "#######",
+    " ##### ",
+    "  ###  ",
+    "   #   ",
+]
+STAR_PIXELS = [
+    "   #   ",
+    "   #   ",
+    "## # ##",
+    " ##### ",
+    "  ###  ",
+    " ## ## ",
+    "##   ##",
+]
+PARTICLE_PIXELS = {
+    "heart": (HEART_PIXELS, HEART_COLOR),
+    "star": (STAR_PIXELS, STAR_COLOR),
+    "anger": (STAR_PIXELS, ANGER_COLOR),
+}
+_PARTICLE_CACHE = {}
+
+
+def particle_sprite(kind):
+    sprite = _PARTICLE_CACHE.get(kind)
+    if sprite is None:
+        pattern, color = PARTICLE_PIXELS[kind]
+        h = len(pattern)
+        w = len(pattern[0])
+        base = pygame.Surface((w, h), pygame.SRCALPHA)
+        base.fill(CLEAR)
+        for y, row in enumerate(pattern):
+            for x, cell in enumerate(row):
+                if cell == "#":
+                    base.set_at((x, y), color)
+        sprite = pygame.transform.scale(base, (w * PARTICLE_SCALE, h * PARTICLE_SCALE))
+        _PARTICLE_CACHE[kind] = sprite
+    return sprite
 
 
 def draw_pet_frame(pet):
@@ -1389,8 +1626,22 @@ def draw_pet_frame(pet):
         px(small, left_eye_x, eye_y, HIGHLIGHT)
         px(small, right_eye_x, eye_y, HIGHLIGHT)
 
+    if pet.angry:
+        # Slanted brows (high on the outside, low toward the nose).
+        px(small, left_eye_x - 1, eye_y - 2, EYE_COLOR)
+        px(small, left_eye_x, eye_y - 1, EYE_COLOR)
+        px(small, right_eye_x + 1, eye_y - 2, EYE_COLOR)
+        px(small, right_eye_x, eye_y - 1, EYE_COLOR)
+
     mouth_y = body_y + 7
-    if pet.state == State.RUN:
+    if pet.angry:
+        # Downturned frown.
+        px(small, 8, mouth_y + 1, EYE_COLOR)
+        px(small, 9, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y, EYE_COLOR)
+        px(small, 11, mouth_y, EYE_COLOR)
+        px(small, 12, mouth_y + 1, EYE_COLOR)
+    elif pet.state == State.RUN:
         rect(small, 9, mouth_y, 2, 1, EYE_COLOR)
     elif pet.state == State.JUMP:
         px(small, 10, mouth_y, EYE_COLOR)
@@ -1421,18 +1672,18 @@ def main():
 
     pygame.init()
     overlay = MacOverlay(WINDOW_W, WINDOW_H)
-    bubble = MacOverlay(BUBBLE_CANVAS_W, BUBBLE_CANVAS_H, interactive=False)
+    fx = MacOverlay(FX_W, FX_H, interactive=False)
     display_rects, bounds = overlay.refresh_displays()
     window_tracker = WindowTracker(display_rects, bounds)
     platforms = window_tracker.platforms()
     pet = Pet(bounds)
     pet.place_on_best_platform(platforms)
     canvas = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
-    bubble_canvas = pygame.Surface((BUBBLE_CANVAS_W, BUBBLE_CANVAS_H), pygame.SRCALPHA)
+    fx_canvas = pygame.Surface((FX_W, FX_H), pygame.SRCALPHA)
     clock = pygame.time.Clock()
     last_reassert = 0.0
     last_window_scan = 0.0
-    bubble_visible = False
+    fx_visible = False
 
     while running:
         now = time.monotonic()
@@ -1441,6 +1692,7 @@ def main():
             running = False
             continue
         drag = overlay.consume_drag_state()
+        mouse = overlay.mouse_position()
 
         if now - last_window_scan > 0.75:
             display_rects, bounds = overlay.refresh_displays()
@@ -1451,13 +1703,15 @@ def main():
                 pet.sync_platforms(platforms)
             last_window_scan = now
 
-        if drag["position"] and (drag["dragging"] or drag["released"]):
+        if drag["moved"] and drag["position"]:
             pet.drag_to(*drag["position"])
-
-        if drag["released"]:
+        if drag["released"] and drag["moved"]:
             pet.drop()
-        elif not drag["dragging"]:
-            pet.update(platforms)
+        if drag["clicks"]:
+            pet.on_click(drag["clicks"], mouse)
+
+        if not drag["dragging"]:
+            pet.update(platforms, mouse)
 
         canvas.fill(CLEAR)
         canvas.blit(draw_pet_frame(pet), (0, 0))
@@ -1465,29 +1719,51 @@ def main():
         overlay.move(round(pet.x), round(pet.y))
         overlay.show_surface(canvas)
 
-        if pet.talking:
-            if pet.speech_dirty or pet.speech_surface is None:
-                pet.speech_surface = draw_speech_bubble(pet.speech_text)
-                pet.speech_dirty = False
-            surf = pet.speech_surface
-            bubble_canvas.fill(CLEAR)
-            bx = (BUBBLE_CANVAS_W - surf.get_width()) // 2
-            by = BUBBLE_CANVAS_H - surf.get_height()
-            bubble_canvas.blit(surf, (bx, by))
-            bubble.move(
-                round(pet.x + WINDOW_W / 2 - BUBBLE_CANVAS_W / 2),
-                round(pet.y - BUBBLE_CANVAS_H + 10),
-            )
-            bubble.show_surface(bubble_canvas)
-            bubble_visible = True
-        elif bubble_visible:
-            bubble_canvas.fill(CLEAR)
-            bubble.show_surface(bubble_canvas)
-            bubble_visible = False
+        if pet.talking or pet.particles:
+            origin_x = round(pet.x + WINDOW_W / 2 - FX_W / 2)
+            origin_y = round(pet.y + WINDOW_H / 2 - FX_H / 2)
+            fx_canvas.fill(CLEAR)
+
+            for p in pet.particles:
+                sprite = particle_sprite(p["kind"])
+                sprite.set_alpha(int(255 * max(0.0, min(1.0, p["life"] / p["maxlife"]))))
+                fx_canvas.blit(
+                    sprite,
+                    (
+                        round(p["x"] - origin_x - sprite.get_width() / 2),
+                        round(p["y"] - origin_y - sprite.get_height() / 2),
+                    ),
+                )
+
+            if pet.talking:
+                if pet.speech_dirty or pet.speech_surface is None:
+                    surf = draw_speech_bubble(pet.speech_text)
+                    if pet.y - surf.get_height() < pet.min_y + 4:
+                        surf = draw_speech_bubble(pet.speech_text, tail_up=True)
+                        pet.speech_tail_up = True
+                    else:
+                        pet.speech_tail_up = False
+                    pet.speech_surface = surf
+                    pet.speech_dirty = False
+                surf = pet.speech_surface
+                bx = (FX_W - surf.get_width()) // 2
+                if pet.speech_tail_up:
+                    by = round(pet.y + WINDOW_H - origin_y - BUBBLE_GAP)
+                else:
+                    by = round(pet.y - origin_y - surf.get_height() + BUBBLE_GAP)
+                fx_canvas.blit(surf, (bx, by))
+
+            fx.move(origin_x, origin_y)
+            fx.show_surface(fx_canvas)
+            fx_visible = True
+        elif fx_visible:
+            fx_canvas.fill(CLEAR)
+            fx.show_surface(fx_canvas)
+            fx_visible = False
 
         if now - last_reassert > 0.5:
             overlay.reassert_top()
-            bubble.reassert_top()
+            fx.reassert_top()
             last_reassert = now
 
         clock.tick(FPS)
