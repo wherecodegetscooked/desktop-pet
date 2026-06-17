@@ -1703,7 +1703,7 @@ def main():
                 pet.sync_platforms(platforms)
             last_window_scan = now
 
-        if drag["moved"] and drag["position"]:
+        if drag["moved"] and drag["position"] and (drag["dragging"] or drag["released"]):
             pet.drag_to(*drag["position"])
         if drag["released"] and drag["moved"]:
             pet.drop()
