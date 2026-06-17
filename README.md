@@ -3,9 +3,18 @@
 A small desktop companion application implemented in Python that shows a cute virtual pet on your screen. Lightweight and easy to run — ideal as a learning project or a fun utility to personalize your desktop.
 
 ## Features
-- Minimal, single-file runnable pet implementation (`pet.py`).
+- Runnable pet implementation, split into focused modules (entry point: `main.py`).
 - Cross-platform Python compatibility (tested on macOS).
 - Simple configuration and easy extension points for animations, actions, and triggers.
+
+### Project layout
+- `main.py` — entry point and main loop.
+- `config.py` — all tunable constants (colours, timings, behaviour chances, phrases).
+- `pet.py` — the `Pet` behaviour model (state machine, physics, reactions).
+- `render.py` — pixel drawing for the sprite, speech bubble, and particles.
+- `overlay.py` — the transparent, always-on-top macOS overlay window (`MacOverlay`).
+- `window_tracker.py` — turns on-screen windows into walkable platforms.
+- `objc_bridge.py` — low-level Objective-C / ctypes plumbing.
 
 ## Requirements
 - Python 3.8+
@@ -42,15 +51,15 @@ python3 -m pip install pyinstaller
 For local development, run the pet with:
 
 ```bash
-python pet.py
+python main.py
 ```
 
 For the packaged app, open `Desktop Pet.app`.
 
-Behavior and controls depend on the implementation in `pet.py`. Open that file to customize appearance, animations, and interactions.
+Behavior and controls live in `pet.py` (logic) and `render.py` (visuals); tweak `config.py` to adjust timings, colours, and phrases.
 
 ## Development
-- Add features or tweak the visuals directly in `pet.py`.
+- Tweak constants in `config.py`, behaviour in `pet.py`, and visuals in `render.py`.
 - Follow standard Python packaging and linting practices when expanding the project.
 
 Running quick checks:
@@ -76,6 +85,6 @@ Inspired by tiny desktop companion projects and tutorials — a fun way to pract
 If you'd like, I can:
 - add a sample `LICENSE` file
 - create a small GIF screenshot and add it to the README
-- add basic CLI flags to `pet.py` (e.g., `--scale`, `--position`)
+- add basic CLI flags to `main.py` (e.g., `--scale`, `--position`)
 
 Tell me which of these you'd like next.

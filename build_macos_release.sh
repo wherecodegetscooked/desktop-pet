@@ -33,7 +33,7 @@ if [[ -n "$TARGET_ARCH" ]]; then
   pyinstaller_args+=(--target-arch "$TARGET_ARCH")
 fi
 
-pyinstaller "${pyinstaller_args[@]}" "$PROJECT_DIR/pet.py"
+pyinstaller "${pyinstaller_args[@]}" "$PROJECT_DIR/main.py"
 
 STAGING_DIR="$RELEASE_DIR/dmg-staging"
 rm -rf "$STAGING_DIR"
