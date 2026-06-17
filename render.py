@@ -368,24 +368,25 @@ def draw_pet_frame(pet):
     left_eye_x = 7 + pet.look_offset
     right_eye_x = 12 + pet.look_offset
     if pet.asleep:
-        # Closed, peaceful eyes: soft downward curls (distinct from loved's arch).
-        for ex in (left_eye_x, right_eye_x):
+        # Closed, peaceful eyes: soft downward curls. Fixed in place (no glancing
+        # with look_offset) since the eyes are shut while he sleeps.
+        for ex in (7, 12):
             px(small, ex - 1, eye_y, EYE_COLOR)
             px(small, ex, eye_y + 1, EYE_COLOR)
             px(small, ex + 1, eye_y, EYE_COLOR)
     elif pet.excited:
-        # Big, bright wide-open eyes: white sclera, round pupil, sparkly glint.
-        for cx in (7, 12):
-            rect(small, cx - 1, eye_y - 1, 3, 3, EYE_WHITE)
-            rect(small, cx, eye_y, 1, 2, EYE_COLOR)
-            px(small, cx, eye_y, HIGHLIGHT)
+        # Wide-awake excited eyes: tall and dark with a bright catchlight. The
+        # grin sells the excitement, so the eyes stay mostly dark.
+        for sx in (7, 11):
+            rect(small, sx, eye_y - 1, 2, 3, EYE_COLOR)
+            px(small, sx, eye_y - 1, EYE_WHITE)
     elif pet.bored:
-        # Sleepy, half-lidded eyes: white showing under a heavy lid so he looks
-        # tired and unimpressed rather than like a creepy black-eyed glare.
-        for cx in (7, 12):
-            rect(small, cx - 1, eye_y, 3, 2, EYE_WHITE)
-            rect(small, cx - 1, eye_y, 3, 1, EYE_COLOR)
-            px(small, cx, eye_y + 1, EYE_COLOR)
+        # Heavy-lidded, sleepy eyes: a brown lid droops over the top of a small
+        # dark eye, so he looks tired instead of having a hard black monoline.
+        for sx in (7, 11):
+            rect(small, sx, eye_y, 2, 2, EYE_COLOR)
+            rect(small, sx, eye_y, 2, 1, PET_SHADE)
+            px(small, sx, eye_y + 1, EYE_WHITE)
     elif pet.loved and not pet.angry:
         # Smitten: happy upward-arc eyes and rosy cheeks.
         for ex in (left_eye_x, right_eye_x):
@@ -398,14 +399,13 @@ def draw_pet_frame(pet):
         rect(small, left_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
         rect(small, right_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
     else:
-        # Normal: white sclera with a dark pupil that glances with look_offset,
-        # plus a cream glint so the eyes read as friendly rather than two dots.
+        # Normal: a dark eye with a single white catchlight that glances around
+        # with look_offset - friendly and alive, but not a wide white sclera.
         look = max(-1, min(1, pet.look_offset))
-        for cx in (7, 12):
-            rect(small, cx - 1, eye_y, 3, 2, EYE_WHITE)
-            pupil_x = max(cx - 1, min(cx + 1, cx + look))
-            rect(small, pupil_x, eye_y, 1, 2, EYE_COLOR)
-            px(small, pupil_x, eye_y, HIGHLIGHT)
+        for sx in (7, 11):
+            ex = sx + look
+            rect(small, ex, eye_y, 2, 2, EYE_COLOR)
+            px(small, ex, eye_y, EYE_WHITE)
 
     if pet.angry:
         # Slanted brows (high on the outside, low toward the nose). Anchored to

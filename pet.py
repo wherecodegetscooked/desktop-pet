@@ -732,7 +732,7 @@ class Pet:
                 and not self.rage
                 and not self.following
             ):
-                self._turn_at_ledge_edge()
+                self._halt_at_ledge_edge()
             self.x += self.vx
             if self.platform and self._feet_inside_platform(self.platform):
                 self.y = self.platform["y"] - WINDOW_H
@@ -1001,24 +1001,29 @@ class Pet:
             <= platform["x"] + platform["w"] - PLATFORM_EDGE_MARGIN
         )
 
-    def _turn_at_ledge_edge(self):
-        """Reverse course just before walking off the current ledge so he paces
-        the window rather than tipping over its corner. No-op on ledges too
-        narrow to stand on (normal falling handles those)."""
+    def _halt_at_ledge_edge(self):
+        """Stop right at the ledge edge instead of teetering off it: clamp to the
+        edge and stand still for a beat (no turning around, no sliding away). He
+        leaves a window only deliberately — via drop-through or a jump. No-op on
+        ledges too narrow to stand on, where normal falling takes over."""
         platform = self.platform
         left = platform["x"] + PLATFORM_EDGE_MARGIN
         right = platform["x"] + platform["w"] - PLATFORM_EDGE_MARGIN
         if right <= left:
             return
         next_foot = self._feet_x() + self.vx
+        at_edge = False
         if next_foot < left:
             self.x = left - WINDOW_W * 0.5
-            self.vx = max(abs(self.vx), 0.4)
-            self.facing_right = True
+            at_edge = True
         elif next_foot > right:
             self.x = right - WINDOW_W * 0.5
-            self.vx = -max(abs(self.vx), 0.4)
-            self.facing_right = False
+            at_edge = True
+        if at_edge:
+            self.vx = 0.0
+            if self.state in (State.WALK, State.RUN):
+                self.state = State.IDLE
+                self.state_timer = random.randint(60, 150)
 
     def _landing_platform(self, platforms):
         previous_feet_y = self.y + WINDOW_H - self.jump_vy
