@@ -17,7 +17,9 @@ import time
 
 import pygame
 
+from ball import Ball
 from config import (
+    BALL_WIN,
     BUBBLE_GAP,
     CHILD_LIFESPAN_MAX,
     CHILD_LIFESPAN_MIN,
@@ -32,7 +34,13 @@ from config import (
 )
 from overlay import MacOverlay
 from pet import Pet
-from render import draw_pet_frame, draw_speech_bubble, draw_weapon, particle_sprite
+from render import (
+    draw_ball,
+    draw_pet_frame,
+    draw_speech_bubble,
+    draw_weapon,
+    particle_sprite,
+)
 from window_tracker import WindowTracker
 
 
@@ -184,6 +192,11 @@ def main():
     focus_active = False
     focus_frames_left = 0
     focus_total_frames = FOCUS_MINUTES * 60 * FPS
+    # Fetch ball: a single bouncy ball the pets chase; despawns after resting.
+    ball = None
+    ball_overlay = None
+    ball_rest_frames = 0
+    ball_despawn_frames = 6 * FPS
 
     while running:
         now = time.monotonic()
@@ -232,6 +245,22 @@ def main():
                 focus_active = False
                 for entry in pets:
                     entry["pet"].end_focus()
+            elif action == "ball":
+                lead = pets[0]["pet"]
+                if ball_overlay is None:
+                    ball_overlay = MacOverlay(BALL_WIN, BALL_WIN, interactive=False)
+                ball = Ball(lead.x + WINDOW_W / 2, lead.y - 50, bounds)
+                ball.kick(random.uniform(-4.0, 4.0), -3.0)
+                ball_rest_frames = 0
+                ball_overlay.reassert_top()  # re-show if it was hidden on despawn
+                lead.spawn_particles("star", 2)
+            elif action == "feed":
+                for entry in pets:
+                    entry["pet"].feed()
+            elif action == "recolour":
+                pets[0]["pet"].cycle_palette()
+            elif action == "rename":
+                pets[0]["pet"].rename()
 
         if now - last_window_scan > 0.75:
             display_rects, bounds = primary.refresh_displays()
@@ -241,6 +270,8 @@ def main():
                 entry["pet"].set_bounds(bounds)
                 if not entry["pet"].airborne:
                     entry["pet"].sync_platforms(platforms)
+            if ball is not None:
+                ball.set_bounds(bounds)
             last_window_scan = now
 
         # Drag: only a gesture that actually moved counts as a drag, so a plain
@@ -259,6 +290,10 @@ def main():
             target = pet_under_point(pets, mouse) or pets[0]
             target["pet"].on_click(drag["clicks"], mouse)
 
+        # Advance the fetch ball before the pets so they react to its new spot.
+        if ball is not None:
+            ball.update(platforms)
+
         for entry in pets:
             pet = entry["pet"]
             if entry is drag_target:
@@ -266,7 +301,15 @@ def main():
             pet.observe_activity(idle_seconds, keys_this_frame)
             if not drag["dragging"]:
                 pet.observe_cursor(mouse)
-            pet.update(platforms, mouse)
+            pet.update(platforms, mouse, ball)
+
+        # Retire the ball once it has sat still for a while.
+        if ball is not None:
+            ball_rest_frames = ball_rest_frames + 1 if ball.resting else 0
+            if ball_rest_frames > ball_despawn_frames:
+                ball_overlay.close()
+                ball = None
+                ball_rest_frames = 0
 
         # Pomodoro countdown: when the focus timer elapses, everyone celebrates.
         if focus_active:
@@ -295,10 +338,16 @@ def main():
         for entry in pets:
             render_pet(entry)
 
+        if ball is not None:
+            ball_overlay.move(round(ball.x - BALL_WIN / 2), round(ball.y - BALL_WIN / 2))
+            ball_overlay.show_surface(draw_ball())
+
         if now - last_reassert > 0.5:
             for entry in pets:
                 entry["overlay"].reassert_top()
                 entry["fx"].reassert_top()
+            if ball is not None:
+                ball_overlay.reassert_top()
             last_reassert = now
 
         clock.tick(FPS)

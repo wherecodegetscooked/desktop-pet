@@ -9,6 +9,12 @@ import pygame
 
 from config import (
     ANGER_COLOR,
+    BALL_BASE_R,
+    BALL_COLOR,
+    BALL_HIGHLIGHT,
+    BALL_SCALE,
+    BALL_SHADE,
+    BALL_WIN,
     BELLY_COLOR,
     BUBBLE_FILL_COLOR,
     BUBBLE_MAX_TEXT_W,
@@ -27,10 +33,12 @@ from config import (
     PARTICLE_SCALE,
     PET_COLOR,
     PET_SHADE,
+    QUESTION_COLOR,
     SPRITE_H,
     SPRITE_W,
     STAR_COLOR,
     STEEL_COLOR,
+    SWEAT_COLOR,
     WEAPON_SCALE,
     WINDOW_H,
     WINDOW_W,
@@ -246,12 +254,21 @@ DUST_PIXELS = [
     "####",
     " ## ",
 ]
+SWEAT_PIXELS = [
+    " # ",
+    " # ",
+    "# #",
+    "###",
+    " # ",
+]
 PARTICLE_PIXELS = {
     "heart": (HEART_PIXELS, HEART_COLOR),
     "star": (STAR_PIXELS, STAR_COLOR),
     "anger": (STAR_PIXELS, ANGER_COLOR),
     "zzz": (ZZZ_PIXELS, ZZZ_COLOR),
     "dust": (DUST_PIXELS, DUST_COLOR),
+    "sweat": (SWEAT_PIXELS, SWEAT_COLOR),
+    "question": (FONT_5x7["?"], QUESTION_COLOR),
 }
 _PARTICLE_CACHE = {}
 
@@ -324,9 +341,43 @@ def draw_weapon(kind):
     return sprite
 
 
+_BALL_SPRITE = None
+
+
+def draw_ball():
+    """The fetch ball, centred in a BALL_WIN-sized transparent canvas."""
+    global _BALL_SPRITE
+    if _BALL_SPRITE is None:
+        d = BALL_BASE_R * 2 + 1
+        c = BALL_BASE_R
+        base = pygame.Surface((d, d), pygame.SRCALPHA)
+        base.fill(CLEAR)
+        pygame.draw.circle(base, BALL_COLOR, (c, c), BALL_BASE_R)
+        base.set_at((c + 1, c + 1), BALL_SHADE)
+        base.set_at((c + 2, c + 1), BALL_SHADE)
+        base.set_at((c + 1, c + 2), BALL_SHADE)
+        base.set_at((c - 1, c - 1), BALL_HIGHLIGHT)
+        _BALL_SPRITE = pygame.transform.scale(base, (d * BALL_SCALE, d * BALL_SCALE))
+    canvas = pygame.Surface((BALL_WIN, BALL_WIN), pygame.SRCALPHA)
+    canvas.fill(CLEAR)
+    sprite = _BALL_SPRITE
+    canvas.blit(
+        sprite,
+        ((BALL_WIN - sprite.get_width()) // 2, (BALL_WIN - sprite.get_height()) // 2),
+    )
+    return canvas
+
+
 def draw_pet_frame(pet):
     small = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
     small.fill(CLEAR)
+
+    # Per-pet palette (personality recolour), falling back to the defaults.
+    palette = getattr(pet, "palette", None) or {}
+    body = palette.get("color", PET_COLOR)
+    shade = palette.get("shade", PET_SHADE)
+    belly = palette.get("belly", BELLY_COLOR)
+    hi = palette.get("highlight", HIGHLIGHT)
 
     bob = 0
     if pet.state in (State.WALK, State.RUN):
@@ -336,24 +387,24 @@ def draw_pet_frame(pet):
         bob = -1
 
     body_y = 4 + bob
-    rect(small, 5, body_y + 1, 10, 8, PET_COLOR)
-    rect(small, 4, body_y + 3, 12, 5, PET_COLOR)
-    rect(small, 7, body_y + 6, 6, 4, BELLY_COLOR)
-    rect(small, 6, body_y + 1, 2, 1, HIGHLIGHT)
-    rect(small, 13, body_y + 4, 2, 4, PET_SHADE)
+    rect(small, 5, body_y + 1, 10, 8, body)
+    rect(small, 4, body_y + 3, 12, 5, body)
+    rect(small, 7, body_y + 6, 6, 4, belly)
+    rect(small, 6, body_y + 1, 2, 1, hi)
+    rect(small, 13, body_y + 4, 2, 4, shade)
 
     # Ears
-    px(small, 5, body_y, PET_COLOR)
-    px(small, 6, body_y - 1, PET_COLOR)
-    px(small, 14, body_y, PET_COLOR)
-    px(small, 13, body_y - 1, PET_COLOR)
+    px(small, 5, body_y, body)
+    px(small, 6, body_y - 1, body)
+    px(small, 14, body_y, body)
+    px(small, 13, body_y - 1, body)
 
     # Arms
     arm_swing = 1 if (pet.frame // 7) % 2 else 0
     if pet.state == State.IDLE:
         arm_swing = 0
-    rect(small, 3, body_y + 6 - arm_swing, 2, 2, PET_COLOR)
-    rect(small, 15, body_y + 5 + arm_swing, 2, 2, PET_COLOR)
+    rect(small, 3, body_y + 6 - arm_swing, 2, 2, body)
+    rect(small, 15, body_y + 5 + arm_swing, 2, 2, body)
 
     # Legs
     phase = (pet.frame // (7 if pet.state == State.WALK else 4)) % 2
@@ -361,7 +412,7 @@ def draw_pet_frame(pet):
     for i, leg_x in enumerate([6, 9, 12, 14]):
         lifted = leg_lift and (i % 2 == phase)
         leg_h = 1 if lifted else 3
-        rect(small, leg_x, body_y + 9, 1, leg_h, PET_SHADE)
+        rect(small, leg_x, body_y + 9, 1, leg_h, shade)
 
     # Face
     eye_y = body_y + 4
@@ -374,19 +425,11 @@ def draw_pet_frame(pet):
             px(small, ex - 1, eye_y, EYE_COLOR)
             px(small, ex, eye_y + 1, EYE_COLOR)
             px(small, ex + 1, eye_y, EYE_COLOR)
-    elif pet.excited:
-        # Wide-awake excited eyes: tall and dark with a bright catchlight. The
-        # grin sells the excitement, so the eyes stay mostly dark.
-        for sx in (7, 11):
-            rect(small, sx, eye_y - 1, 2, 3, EYE_COLOR)
-            px(small, sx, eye_y - 1, EYE_WHITE)
-    elif pet.bored:
-        # Heavy-lidded, sleepy eyes: a brown lid droops over the top of a small
-        # dark eye, so he looks tired instead of having a hard black monoline.
-        for sx in (7, 11):
-            rect(small, sx, eye_y, 2, 2, EYE_COLOR)
-            rect(small, sx, eye_y, 2, 1, PET_SHADE)
-            px(small, sx, eye_y + 1, EYE_WHITE)
+    elif pet.scared and not pet.angry:
+        # Wide, frightened eyes: big whites with tiny darting pupils.
+        for cx in (7, 12):
+            rect(small, cx - 1, eye_y - 1, 3, 3, EYE_WHITE)
+            px(small, cx, eye_y, EYE_COLOR)
     elif pet.loved and not pet.angry:
         # Smitten: happy upward-arc eyes and rosy cheeks.
         for ex in (left_eye_x, right_eye_x):
@@ -395,6 +438,29 @@ def draw_pet_frame(pet):
             px(small, ex + 1, eye_y + 1, EYE_COLOR)
         px(small, left_eye_x - 1, eye_y + 2, BLUSH_COLOR)
         px(small, right_eye_x + 1, eye_y + 2, BLUSH_COLOR)
+    elif pet.excited:
+        # Wide-awake excited eyes: tall and dark with a bright catchlight. The
+        # grin sells the excitement, so the eyes stay mostly dark.
+        for sx in (7, 11):
+            rect(small, sx, eye_y - 1, 2, 3, EYE_COLOR)
+            px(small, sx, eye_y - 1, EYE_WHITE)
+    elif pet.hungry and not pet.angry:
+        # Big pleading eyes (the open, drooly mouth carries the hunger).
+        for sx in (7, 11):
+            rect(small, sx, eye_y, 2, 2, EYE_COLOR)
+            px(small, sx, eye_y, EYE_WHITE)
+    elif pet.curious and not pet.angry:
+        # Alert, attentive eyes; glint on the inner side (the '?' tells the rest).
+        for sx in (7, 11):
+            rect(small, sx, eye_y, 2, 2, EYE_COLOR)
+            px(small, sx + 1, eye_y, EYE_WHITE)
+    elif pet.bored:
+        # Heavy-lidded, sleepy eyes: a brown lid droops over the top of a small
+        # dark eye, so he looks tired instead of having a hard black monoline.
+        for sx in (7, 11):
+            rect(small, sx, eye_y, 2, 2, EYE_COLOR)
+            rect(small, sx, eye_y, 2, 1, shade)
+            px(small, sx, eye_y + 1, EYE_WHITE)
     elif pet.blink:
         rect(small, left_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
         rect(small, right_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
@@ -427,6 +493,23 @@ def draw_pet_frame(pet):
         px(small, 10, mouth_y, EYE_COLOR)
         px(small, 11, mouth_y, EYE_COLOR)
         px(small, 12, mouth_y + 1, EYE_COLOR)
+    elif pet.scared:
+        # Nervous, wavy mouth.
+        px(small, 8, mouth_y + 1, EYE_COLOR)
+        px(small, 9, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
+        px(small, 11, mouth_y, EYE_COLOR)
+        px(small, 12, mouth_y + 1, EYE_COLOR)
+    elif pet.hungry:
+        # Open, drooly mouth with a little tongue.
+        px(small, 9, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y, EYE_COLOR)
+        px(small, 11, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y + 1, BLUSH_COLOR)
+    elif pet.curious:
+        # Small, intrigued "o".
+        px(small, 10, mouth_y, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
     elif pet.excited:
         # Big open grin.
         px(small, 8, mouth_y, EYE_COLOR)

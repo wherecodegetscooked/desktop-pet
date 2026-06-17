@@ -10,6 +10,27 @@ import random
 
 from config import (
     AFK_SLEEP_SECONDS,
+    BALL_KICK_VX,
+    BALL_KICK_VY,
+    BAT_RANGE,
+    CURIOUS_CHANCE,
+    CURIOUS_DURATION,
+    CURIOUS_PHRASES,
+    CURIOUS_SPEED,
+    FETCH_REACH_HEIGHT,
+    FETCH_SPEED,
+    HUNGER_THRESHOLD,
+    HUNGRY_PHRASES,
+    HUNGRY_SECONDS,
+    PALETTES,
+    PET_NAMES,
+    PLAY_PHRASES,
+    SCARED_DURATION,
+    SCARED_PHRASES,
+    SCARED_TREMBLE,
+    SHAKE_REVERSALS,
+    SHAKE_SPEED,
+    SHAKE_WINDOW,
     ANGER_DECAY,
     ANGRY_DURATION,
     ANGRY_PHRASES,
@@ -156,6 +177,21 @@ class Pet:
         self._drag_prev = None
         self._throw_vx = 0.0
         self._throw_vy = 0.0
+        # Shake-to-scare: count quick drag reversals.
+        self._shake_dir = 0
+        self._shake_count = 0
+        self._shake_decay = 0
+        # Personality: a recolourable palette and a name.
+        self.palette_index = 0
+        self.palette = PALETTES[0]
+        self.name = random.choice(PET_NAMES)
+        # Extra moods.
+        self.hunger = 0.0
+        self.hungry = False
+        self.curious = False
+        self.curious_timer = 0
+        self.scared = False
+        self.scared_timer = 0
         self.pick_state()
 
     @property
@@ -164,12 +200,18 @@ class Pet:
             return "rage"
         if self.angry:
             return "angry"
+        if self.scared:
+            return "scared"
         if self.asleep:
             return "asleep"
         if self.loved:
             return "love"
         if self.excited:
             return "excited"
+        if self.hungry:
+            return "hungry"
+        if self.curious:
+            return "curious"
         if self.bored:
             return "bored"
         return "neutral"
@@ -179,10 +221,16 @@ class Pet:
             return RAGE_PHRASES
         if self.angry:
             return ANGRY_PHRASES
+        if self.scared:
+            return SCARED_PHRASES
         if self.loved:
             return LOVE_PHRASES
         if self.excited:
             return EXCITED_PHRASES
+        if self.hungry:
+            return HUNGRY_PHRASES
+        if self.curious:
+            return CURIOUS_PHRASES
         if self.bored:
             return BORED_PHRASES
         if self.focusing:
@@ -503,6 +551,133 @@ class Pet:
             if self.loved_timer <= 0 and self.love < 1.0:
                 self.loved = False
 
+        # Hunger slowly creeps up until he's fed.
+        self.hunger = min(1.0, self.hunger + 1.0 / (HUNGRY_SECONDS * FPS))
+        self.hungry = self.hunger >= HUNGER_THRESHOLD
+
+        if self.scared:
+            self.scared_timer -= 1
+            if self.scared_timer <= 0:
+                self.scared = False
+        if self.curious:
+            self.curious_timer -= 1
+            if self.curious_timer <= 0:
+                self.curious = False
+
+        # Now and then, when he's otherwise idle and content, something catches
+        # his eye and he gets curious.
+        if (
+            not self.curious
+            and not self.scared
+            and not self.asleep
+            and not self.rage
+            and not self.angry
+            and not self.excited
+            and not self.bored
+            and not self.hungry
+            and not self.loved
+            and not self.focusing
+            and not self.airborne
+            and not self.tumbling
+            and not self.righting
+            and random.random() < CURIOUS_CHANCE
+        ):
+            self.curious = True
+            self.curious_timer = CURIOUS_DURATION
+            self.spawn_particles("question", 1)
+
+    def _become_scared(self):
+        self.scared = True
+        self.scared_timer = SCARED_DURATION
+        self.curious = False
+        self.following = False
+        self.loved = False
+        self.spawn_particles("sweat", random.randint(2, 3))
+        self.start_talk(random.choice(SCARED_PHRASES))
+
+    def feed(self):
+        """Fill his belly and make him happy (menu 'Feed')."""
+        self.hunger = 0.0
+        self.hungry = False
+        self.spawn_particles("heart", 4)
+        self.start_talk("Yum!")
+
+    def cycle_palette(self):
+        """Recolour to the next palette (menu 'Recolour')."""
+        self.palette_index = (self.palette_index + 1) % len(PALETTES)
+        self.palette = PALETTES[self.palette_index]
+        self.spawn_particles("star", 3)
+
+    def rename(self, name=None):
+        """Give him a new name and have him announce it (menu 'Rename')."""
+        self.name = name or random.choice(PET_NAMES)
+        self.spawn_particles("heart", 2)
+        self.start_talk("I'm " + self.name + "!")
+
+    # -- Curiosity / fright / fetch ---------------------------------------
+
+    def _update_curious(self, mouse):
+        """Trot over toward the cursor to investigate, with the odd '?'."""
+        dx = mouse[0] - self._feet_x()
+        if abs(dx) < FOLLOW_STOP_DISTANCE + 6:
+            self.vx = 0.0
+            self.state = State.IDLE
+        else:
+            direction = 1 if dx > 0 else -1
+            self.vx = direction * CURIOUS_SPEED
+            self.facing_right = direction > 0
+            self.state = State.WALK
+        self.state_timer = 20
+        if random.random() < 0.02:
+            self.spawn_particles("question", 1)
+
+    def _update_scared(self, mouse):
+        """Shiver in place and shy away from the cursor."""
+        self.state = State.IDLE
+        self.vx = random.uniform(-SCARED_TREMBLE, SCARED_TREMBLE)
+        if mouse is not None:
+            self.facing_right = mouse[0] <= self._feet_x()
+        if random.random() < 0.05:
+            self.spawn_particles("sweat", 1)
+
+    def _wants_to_play(self, ball):
+        """Whether he'll chase the ball right now (it has to be roughly at his
+        level — he won't run off a window trying to reach one far below)."""
+        if ball is None:
+            return False
+        if (
+            self.asleep
+            or self.rage
+            or self.angry
+            or self.scared
+            or self.tumbling
+            or self.righting
+            or self.focusing
+        ):
+            return False
+        return abs(ball.y - self.y) <= FETCH_REACH_HEIGHT
+
+    def _update_fetch(self, ball):
+        """Charge the ball; once close enough, bat it away to keep the game going."""
+        dx = ball.x - self._feet_x()
+        if abs(dx) <= BAT_RANGE:
+            direction = 1 if dx >= 0 else -1
+            ball.kick(direction * BALL_KICK_VX, -BALL_KICK_VY)
+            self.facing_right = direction > 0
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.state_timer = 18
+            self.jump_cooldown = max(self.jump_cooldown, 10)
+            self.spawn_particles("star", 1)
+            if random.random() < 0.12:
+                self.start_talk(random.choice(PLAY_PHRASES))
+        else:
+            direction = 1 if dx > 0 else -1
+            self.vx = direction * FETCH_SPEED
+            self.facing_right = direction > 0
+            self.state = State.RUN
+            self.state_timer = 20
+
     def _update_rage(self, mouse, platforms):
         """Aggressively pursue the cursor on foot: run toward it, jump up onto
         windows to climb toward it, and walk off ledges to drop down to it.
@@ -660,7 +835,7 @@ class Pet:
         self.vy = 0.0
         self.state_timer = 240
 
-    def update(self, platforms, mouse=None):
+    def update(self, platforms, mouse=None, ball=None):
         self.frame += 1
         self.state_timer -= 1
         self.jump_cooldown = max(0, self.jump_cooldown - 1)
@@ -700,15 +875,25 @@ class Pet:
 
             self._energy_fx()
 
-            # While focusing he stays put: no cursor-chasing, window hops, or
-            # ledge drops. Excited bounces are likewise suppressed in _energy_fx.
-            if not self.focusing:
+            grounded = not self.airborne and self.state != State.JUMP
+            if self.scared:
+                # Spooked: tremble in place; no chasing, fetching, or wandering.
+                if grounded:
+                    self._update_scared(mouse)
+            elif self.focusing:
+                # Heads-down: stays put (pick_state keeps him calm).
+                pass
+            elif ball is not None and grounded and self._wants_to_play(ball):
+                self._update_fetch(ball)
+            elif self.curious and grounded and mouse is not None:
+                self._update_curious(mouse)
+            else:
                 if self.following:
                     self._update_follow(mouse)
-                elif mouse is not None and not self.airborne and self.state != State.JUMP:
+                elif mouse is not None and grounded:
                     self._maybe_follow_mouse(mouse)
 
-                if not self.following and not self.airborne and self.state != State.JUMP:
+                if not self.following and grounded:
                     if not self._maybe_drop_through_platform():
                         self._maybe_jump_to_window(platforms)
 
@@ -811,10 +996,27 @@ class Pet:
 
     def drag_to(self, x, y):
         nx, ny = float(x), float(y)
-        # Track how fast he's being dragged so a flick on release becomes a throw.
+        # Track how fast he's being dragged so a flick on release becomes a throw,
+        # and watch for a rapid back-and-forth shake, which frightens him.
+        if self._shake_decay > 0:
+            self._shake_decay -= 1
+            if self._shake_decay == 0:
+                self._shake_count = 0
+                self._shake_dir = 0
         if self._drag_prev is not None:
-            self._throw_vx = nx - self._drag_prev[0]
+            dx = nx - self._drag_prev[0]
+            self._throw_vx = dx
             self._throw_vy = ny - self._drag_prev[1]
+            if abs(dx) >= SHAKE_SPEED:
+                sign = 1 if dx > 0 else -1
+                if self._shake_dir and sign != self._shake_dir:
+                    self._shake_count += 1
+                    self._shake_decay = SHAKE_WINDOW
+                self._shake_dir = sign
+            if self._shake_count >= SHAKE_REVERSALS and not self.scared:
+                self._become_scared()
+                self._shake_count = 0
+                self._shake_decay = 0
         self._drag_prev = (nx, ny)
         self.x = nx
         self.y = ny

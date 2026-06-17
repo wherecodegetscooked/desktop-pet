@@ -277,6 +277,13 @@ class MacOverlay:
         )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
+            menu, "Toss a ball", "t", self.menu_controller, b"tossBall:"
+        )
+        self._add_menu_item(menu, "Feed", "e", self.menu_controller, b"feedPet:")
+        self._add_menu_item(menu, "Recolour", "c", self.menu_controller, b"recolour:")
+        self._add_menu_item(menu, "Rename", "n", self.menu_controller, b"renamePet:")
+        _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
+        self._add_menu_item(
             menu, "Breed (new pet)", "b", self.menu_controller, b"breed:"
         )
         self._add_menu_item(
@@ -345,6 +352,10 @@ class MacOverlay:
             (b"removeDup:", "remove"),
             (b"startFocus:", "focus_start"),
             (b"stopFocus:", "focus_stop"),
+            (b"tossBall:", "ball"),
+            (b"feedPet:", "feed"),
+            (b"recolour:", "recolour"),
+            (b"renamePet:", "rename"),
         ):
             imp = make_imp(action)
             self._menu_imps.append(imp)  # keep callbacks alive

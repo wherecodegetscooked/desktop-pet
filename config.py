@@ -90,6 +90,9 @@ STAR_COLOR = (255, 214, 92, 255)
 ANGER_COLOR = (232, 64, 52, 255)
 ZZZ_COLOR = (150, 170, 210, 255)
 DUST_COLOR = (205, 198, 186, 255)
+SWEAT_COLOR = (120, 195, 235, 255)
+QUESTION_COLOR = (255, 236, 150, 255)
+FOOD_COLOR = (235, 150, 90, 255)
 
 # Mouse interaction --------------------------------------------------------
 FOLLOW_CHANCE = 0.004                # Per-frame chance to start chasing the cursor.
@@ -168,6 +171,62 @@ RIGHT_STIFFNESS = 0.05               # Pull back toward upright (higher = snappi
 RIGHT_DAMPING = 0.82                 # Angular velocity retained per frame.
 RIGHT_SETTLE = 1.5                   # Degrees / deg-per-frame below which he's up.
 
+# Personality / name --------------------------------------------------------
+# Each palette recolours the pet; a name gives him a little identity. Both are
+# cycled from the menu bar (Recolour / Rename).
+PALETTES = [
+    {"name": "Ginger", "color": (236, 145, 92, 255), "shade": (195, 92, 72, 255),
+     "belly": (255, 198, 139, 255), "highlight": (255, 221, 176, 255)},
+    {"name": "Mint", "color": (118, 200, 158, 255), "shade": (74, 150, 116, 255),
+     "belly": (214, 245, 228, 255), "highlight": (198, 245, 220, 255)},
+    {"name": "Bubblegum", "color": (240, 150, 190, 255), "shade": (200, 100, 150, 255),
+     "belly": (255, 216, 236, 255), "highlight": (255, 226, 242, 255)},
+    {"name": "Slate", "color": (140, 150, 172, 255), "shade": (94, 104, 126, 255),
+     "belly": (212, 220, 234, 255), "highlight": (222, 230, 242, 255)},
+    {"name": "Gold", "color": (230, 196, 92, 255), "shade": (190, 150, 60, 255),
+     "belly": (255, 236, 172, 255), "highlight": (255, 242, 192, 255)},
+]
+PET_NAMES = [
+    "Pixel", "Mochi", "Biscuit", "Waffle", "Pebble", "Tofu", "Noodle", "Gizmo",
+    "Sprout", "Mango", "Cosmo", "Bean", "Pip", "Hazel", "Yuki", "Pretzel",
+]
+
+# Hunger (a slow care stat) -------------------------------------------------
+# He gets peckish over time and asks for food; "Feed" from the menu fills him up.
+HUNGRY_SECONDS = 150                 # Seconds from fully fed to fully starving.
+HUNGER_THRESHOLD = 0.6               # Fraction of the way to starving before he's hungry.
+
+# Curiosity -----------------------------------------------------------------
+# Now and then something catches his eye and he trots over to investigate.
+CURIOUS_CHANCE = 0.0009              # Per-frame chance to get curious while idle.
+CURIOUS_DURATION = 240               # Frames a curious spell lasts (~4s).
+CURIOUS_SPEED = 1.4                  # Walk speed while investigating.
+
+# Fright (shake him to scare him) -------------------------------------------
+SHAKE_SPEED = 11                     # Drag px/frame that counts as a shake stroke.
+SHAKE_REVERSALS = 4                  # Quick direction flips that trigger fright.
+SHAKE_WINDOW = 26                    # Frames the reversal tally lingers.
+SCARED_DURATION = 180                # Frames he stays spooked (~3s).
+SCARED_TREMBLE = 1.2                 # Pixels of nervous shiver while scared.
+
+# Fetch / ball --------------------------------------------------------------
+# "Toss a ball" drops a bouncy ball; the nearest pet chases it and bats it.
+BALL_SCALE = 3
+BALL_BASE_R = 4                      # Ball radius in base (pre-scale) pixels.
+BALL_WIN = 12 * BALL_SCALE           # Ball overlay window size in screen pixels.
+BALL_COLOR = (90, 175, 235, 255)
+BALL_SHADE = (54, 124, 186, 255)
+BALL_HIGHLIGHT = (210, 238, 255, 255)
+BALL_RESTITUTION = 0.62              # Bounce energy kept off floors/windows.
+BALL_FRICTION = 0.93                 # Horizontal speed kept while rolling.
+BALL_AIR_FRICTION = 0.995
+BALL_REST_SPEED = 0.45               # Below this it has come to rest.
+BALL_KICK_VX = 6.5                   # Sideways pop when the pet bats it.
+BALL_KICK_VY = 7.5                   # Upward pop when the pet bats it.
+FETCH_SPEED = 3.0                    # How fast the pet charges the ball.
+BAT_RANGE = 24                       # Distance (px) at which the pet bats the ball.
+FETCH_REACH_HEIGHT = 90              # Only chase a ball within this vertical reach.
+
 # Weapon pixel art ----------------------------------------------------------
 WEAPON_SCALE = 3
 STEEL_COLOR = (206, 212, 224, 255)
@@ -213,19 +272,19 @@ PHRASES = [
     "One step at a time.",
     "Save your work!",
     "Did you commit?",
-    "Push to main!",
+    "I like you :)",
     "Write the tests.",
     "Read the docs.",
     "Refactor later.",
-    "Ship now, polish later.",
+    "I feel good. How about you?",
     "Coffee break!",
     "Tabs or spaces?",
     "It works on my machine!",
     "Have you tried turning it off?",
-    "Bug? Or feature?",
+    "How are you doing?",
     "Rubber duck me!",
     "Commit early, commit often.",
-    "Less talk, more code.",
+    "Less talk, more do.",
     "Inbox zero, maybe?",
     "Plan, then do.",
     "Small wins count.",
@@ -242,6 +301,22 @@ PHRASES = [
     "Crush that to-do list!",
     "Boop! Now work.",
     "Stay hungry, stay foolish.",
+    "You're doing wonderfully.",
+    "Sending good vibes.",
+    "Little by little.",
+    "You are unstoppable.",
+    "Be kind to yourself.",
+    "Smile!",
+    "Keep shining.",
+    "A little progress is still progress.",
+    "You're capable of hard things.",
+    "Sprinkle some joy.",
+    "Breathe in, breathe out.",
+    "Hug a pillow.",
+    "Take your time.",
+    "Dream big.",
+    "Look at how far you've come.",
+    "You make a difference."
 ]
 
 LOVE_PHRASES = [
@@ -321,4 +396,54 @@ FOCUS_PHRASES = [
     "We got this.",
     "Eyes on it.",
     "Almost there!",
+]
+
+HUNGRY_PHRASES = [
+    "I'm hungry...",
+    "Feed me?",
+    "Snack time?",
+    "Tummy rumbles.",
+    "Got any treats?",
+    "So peckish.",
+    "Food, please!",
+    "Munch munch?",
+    "My belly...",
+    "Nom nom soon?",
+]
+
+CURIOUS_PHRASES = [
+    "Ooh, what's that?",
+    "Hmm?",
+    "What's this?",
+    "Let me see!",
+    "Interesting...",
+    "Huh?",
+    "Curious...",
+    "What's over here?",
+    "A new thing!",
+    "Investigating!",
+]
+
+SCARED_PHRASES = [
+    "Eek!",
+    "Put me down!",
+    "Whoa whoa!",
+    "Too fast!",
+    "Scary!",
+    "Wh-what?!",
+    "Stop shaking!",
+    "I'm dizzy!",
+    "Help!",
+    "Yikes!",
+]
+
+PLAY_PHRASES = [
+    "Fetch!",
+    "Got it!",
+    "Wheee!",
+    "My ball!",
+    "Again!",
+    "Bonk!",
+    "Catch me!",
+    "Play time!",
 ]
