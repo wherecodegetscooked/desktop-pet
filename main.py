@@ -268,18 +268,12 @@ def main():
             elif action == "rename":
                 pets[0]["pet"].rename()
             elif action == "update" and not pending_update:
+                # updater shows its own dialogs (up to date / found / failed);
+                # we only act when it kicks off the download + relaunch.
                 proj = os.path.dirname(os.path.abspath(__file__))
-                status = updater.check_for_updates(proj)
-                lead = pets[0]["pet"]
-                if status == "updating":
-                    lead.start_talk("Updating!")
+                if updater.check_for_updates(proj) == "updating":
+                    pets[0]["pet"].start_talk("Updating!")
                     pending_update = 36  # show the bubble, then quit to relaunch
-                elif status == "uptodate":
-                    lead.start_talk("Up to date!")
-                elif status == "declined":
-                    pass
-                else:
-                    lead.start_talk("Update check failed.")
 
         if now - last_window_scan > 0.75:
             display_rects, bounds = primary.refresh_displays()

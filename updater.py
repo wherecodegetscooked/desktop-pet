@@ -69,27 +69,36 @@ def _bundle_path():
     return None
 
 
-def _confirm(latest):
-    """Native yes/no dialog. Returns True if the user chose to update."""
-    message = (
-        "A new version of Desktop Pet is available "
-        f"(build {latest}).\n\nDownload and update now?"
+def _as_applescript(text):
+    """Quote a Python string as an AppleScript string literal."""
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _alert(message, buttons, default):
+    """Show a native dialog and return the clicked button label (or None).
+
+    Driven through System Events with `activate` so it reliably comes to the
+    front even though the pet is a background (menu-bar-only) app — a plain
+    `osascript display dialog` from such an app often never appears.
+    """
+    button_list = "{" + ", ".join(_as_applescript(b) for b in buttons) + "}"
+    dialog = (
+        f"display dialog {_as_applescript(message)} "
+        f"buttons {button_list} default button {_as_applescript(default)} "
+        'with title "Desktop Pet"'
     )
-    script = (
-        f"display dialog {shlex.quote(message)} "
-        'buttons {"Later", "Update now"} '
-        'default button "Update now" with title "Desktop Pet"'
-    )
+    lines = ["tell application \"System Events\"", "activate", dialog, "end tell"]
+    args = ["osascript"]
+    for line in lines:
+        args += ["-e", line]
     try:
-        result = subprocess.run(
-            ["osascript", "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
+        result = subprocess.run(args, capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.SubprocessError):
-        return False
-    return "Update now" in result.stdout
+        return None
+    marker = "button returned:"
+    if marker in result.stdout:
+        return result.stdout.split(marker, 1)[1].strip()
+    return None
 
 
 _SWAP_SCRIPT = """#!/bin/zsh
@@ -158,16 +167,32 @@ def check_for_updates(project_dir):
         )
         return "updating"
 
+    current = current_version()
     try:
         latest = _latest_version()
     except Exception:
+        _alert(
+            "Couldn't check for updates.\n\nCheck your internet connection and "
+            "try again.",
+            ["OK"],
+            "OK",
+        )
         return "failed"
-    if latest <= current_version():
+    if latest <= current:
+        _alert(f"You're up to date (build {current}).", ["OK"], "OK")
         return "uptodate"
     bundle = _bundle_path()
     if not bundle:
+        _alert("An update is available, but the app couldn't locate itself to "
+               "replace.", ["OK"], "OK")
         return "failed"
-    if not _confirm(latest):
+    choice = _alert(
+        f"A new version of Desktop Pet is available (build {latest}).\n\n"
+        "Download and update now?",
+        ["Later", "Update now"],
+        "Update now",
+    )
+    if choice != "Update now":
         return "declined"
     _spawn_swap(bundle)
     return "updating"
