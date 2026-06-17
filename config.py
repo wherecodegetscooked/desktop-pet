@@ -319,6 +319,7 @@ PHRASES = [
     "You make a difference.",
     "Keep learning.",
     "Celebrate small victories.",
+    "Don't forget to eat!",
 ]
 
 LOVE_PHRASES = [
