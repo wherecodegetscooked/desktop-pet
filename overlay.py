@@ -42,10 +42,15 @@ from objc_bridge import (
 
 
 class MacOverlay:
-    def __init__(self, width, height, interactive=True):
+    def __init__(self, width, height, interactive=True, with_menu=False):
         self.width = width
         self.height = height
         self.interactive = interactive
+        self.with_menu = with_menu
+        # Filled by the status-bar menu callbacks; drained by consume_menu_actions.
+        self.menu_actions = []
+        self.menu_controller = None
+        self._menu_imps = []
         self.objc = _objc_setup()
         self.cg = self._load_core_graphics()
         self.colorspace = self.cg.CGColorSpaceCreateDeviceRGB()
@@ -188,7 +193,7 @@ class MacOverlay:
         _msg(objc, self.layer, "setMagnificationFilter:", nearest)
         _msg(objc, self.layer, "setMinificationFilter:", nearest)
         _msg(objc, self.window, "orderFrontRegardless")
-        if self.interactive:
+        if self.with_menu:
             self._create_status_menu()
 
     def _create_status_menu(self):
@@ -244,23 +249,97 @@ class MacOverlay:
         _msg(objc, button, "setTitle:", title, argtypes=[ctypes.c_void_p])
         _msg(objc, button, "setToolTip:", tooltip, argtypes=[ctypes.c_void_p])
 
+        self._create_menu_controller()
+
         menu = _msg(objc, NSMenu, "alloc")
         menu = _msg(objc, menu, "init")
         _msg(objc, menu, "setAutoenablesItems:", False, argtypes=[ctypes.c_bool])
-        quit_item = _msg(objc, NSMenuItem, "alloc")
-        quit_item = _msg(
+
+        self._add_menu_item(
+            menu, "Breed (new pet)", "b", self.menu_controller, b"breed:"
+        )
+        self._add_menu_item(
+            menu, "Remove a pet", "r", self.menu_controller, b"removeDup:"
+        )
+        _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
+        # Quit hides this primary window; the run loop notices and shuts down.
+        self._add_menu_item(menu, "Quit Desktop Pet", "q", self.window, b"orderOut:")
+
+        _msg(objc, self.status_item, "setMenu:", menu, argtypes=[ctypes.c_void_p])
+
+    def _add_menu_item(self, menu, title, key, target, action_sel):
+        objc = self.objc
+        NSMenuItem = objc.objc_getClass(b"NSMenuItem")
+        item = _msg(objc, NSMenuItem, "alloc")
+        item = _msg(
             objc,
-            quit_item,
+            item,
             "initWithTitle:action:keyEquivalent:",
-            _nsstring(objc, "Quit Desktop Pet"),
-            objc.sel_registerName(b"orderOut:"),
-            _nsstring(objc, "q"),
+            _nsstring(objc, title),
+            objc.sel_registerName(action_sel),
+            _nsstring(objc, key),
             argtypes=[ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p],
         )
-        _msg(objc, quit_item, "setTarget:", self.window, argtypes=[ctypes.c_void_p])
-        _msg(objc, quit_item, "setEnabled:", True, argtypes=[ctypes.c_bool])
-        _msg(objc, menu, "addItem:", quit_item, argtypes=[ctypes.c_void_p])
-        _msg(objc, self.status_item, "setMenu:", menu, argtypes=[ctypes.c_void_p])
+        _msg(objc, item, "setTarget:", target, argtypes=[ctypes.c_void_p])
+        _msg(objc, item, "setEnabled:", True, argtypes=[ctypes.c_bool])
+        _msg(objc, menu, "addItem:", item, argtypes=[ctypes.c_void_p])
+        return item
+
+    def _create_menu_controller(self):
+        """Build a tiny Objective-C class at runtime whose action methods push
+        onto self.menu_actions, so menu-bar clicks reach Python."""
+        objc = self.objc
+        objc.objc_allocateClassPair.restype = ctypes.c_void_p
+        objc.objc_allocateClassPair.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+            ctypes.c_size_t,
+        ]
+        objc.objc_registerClassPair.argtypes = [ctypes.c_void_p]
+        objc.class_addMethod.restype = ctypes.c_bool
+        objc.class_addMethod.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_char_p,
+        ]
+
+        NSObject = objc.objc_getClass(b"NSObject")
+        name = f"DesktopPetMenu_{id(self)}".encode()
+        cls = objc.objc_allocateClassPair(NSObject, name, 0)
+
+        imp_type = ctypes.CFUNCTYPE(
+            None, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+        )
+        actions = self.menu_actions
+
+        def make_imp(action):
+            def handler(_self, _cmd, _sender):
+                actions.append(action)
+
+            return imp_type(handler)
+
+        for sel_name, action in ((b"breed:", "breed"), (b"removeDup:", "remove")):
+            imp = make_imp(action)
+            self._menu_imps.append(imp)  # keep callbacks alive
+            objc.class_addMethod(
+                cls,
+                objc.sel_registerName(sel_name),
+                ctypes.cast(imp, ctypes.c_void_p),
+                b"v@:@",
+            )
+
+        objc.objc_registerClassPair(cls)
+        self.menu_controller = _msg(objc, cls, "new")
+
+    def consume_menu_actions(self):
+        actions = self.menu_actions[:]
+        self.menu_actions.clear()
+        return actions
+
+    def close(self):
+        """Hide this overlay's window (used when a bred pet is removed)."""
+        _msg(self.objc, self.window, "orderOut:", None)
 
     def should_quit(self):
         window_visible = _msg(self.objc, self.window, "isVisible", restype=ctypes.c_bool)

@@ -20,6 +20,11 @@ from config import (
     GROUND_PLATFORM_NAME,
     IDLE_FX_MAX,
     IDLE_FX_MIN,
+    LOVE_DECAY,
+    LOVE_DURATION,
+    LOVE_MAX,
+    LOVE_PHRASES,
+    LOVE_THRESHOLD,
     MAX_PARTICLES,
     MAX_TARGET_DISTANCE,
     MAX_TARGET_HEIGHT,
@@ -27,16 +32,25 @@ from config import (
     MAX_TARGET_JUMP_SPEED_X,
     NORMAL_JUMP_POWER_MAX,
     NORMAL_JUMP_POWER_MIN,
+    PET_STROKE_CALM,
+    PET_STROKE_LOVE,
     PHRASES,
     PLATFORM_DROP_CHANCE,
+    RAGE_CHASE_SPEED,
+    RAGE_DURATION,
+    RAGE_PHRASES,
+    RAGE_THRESHOLD,
     RANDOM_JUMP_STATE_CHANCE,
     SPEAK_CHANCE,
     SPEAK_COOLDOWN_MAX,
     SPEAK_COOLDOWN_MIN,
     SPEECH_MIN_FRAMES,
     SPEECH_PER_CHAR,
+    STROKE_MAX_SPEED,
+    STROKE_MIN_SPEED,
     TARGET_JUMP_EXTRA_HEIGHT,
     TARGET_JUMP_POWER_MIN,
+    WEAPONS,
     WINDOW_H,
     WINDOW_JUMP_CHANCE,
     WINDOW_W,
@@ -85,7 +99,38 @@ class Pet:
         self.anger = 0.0
         self.angry = False
         self.angry_timer = 0
+        # Violence: once anger boils over he arms himself and chases the cursor.
+        self.rage = False
+        self.rage_timer = 0
+        self.weapon = None
+        # Affection: slow strokes make him fall in love.
+        self.love = 0.0
+        self.loved = False
+        self.loved_timer = 0
+        self._last_cursor_x = None
+        self._stroke_dir = 0
+        # Breeding: spawned children carry a lifespan (frames); adults stay None.
+        self.life = None
         self.pick_state()
+
+    @property
+    def mood(self):
+        if self.rage:
+            return "rage"
+        if self.angry:
+            return "angry"
+        if self.loved:
+            return "love"
+        return "neutral"
+
+    def _phrase_pool(self):
+        if self.rage:
+            return RAGE_PHRASES
+        if self.angry:
+            return ANGRY_PHRASES
+        if self.loved:
+            return LOVE_PHRASES
+        return PHRASES
 
     def set_bounds(self, bounds):
         """Update the roamable area to the union of all displays.
@@ -114,7 +159,7 @@ class Pet:
             return
         if random.random() > SPEAK_CHANCE:
             return
-        self.start_talk(random.choice(PHRASES))
+        self.start_talk(random.choice(self._phrase_pool()))
 
     def _update_talking(self):
         """Keep the pet planted while a bubble is up. Returns True if the rest
@@ -182,29 +227,124 @@ class Pet:
     # -- Mouse interaction -------------------------------------------------
 
     def on_click(self, clicks, mouse=None):
-        """React to taps: hearts when calm, anger after a few quick pokes."""
+        """React to taps. Clicks are hostile: a couple are tolerated (hearts),
+        but poking too often angers him and eventually tips him into violence.
+        Clicking also drains any affection he was building up."""
         for _ in range(clicks):
-            if self.angry:
+            if self.rage or self.angry:
                 self.spawn_particles("anger", random.randint(2, 3))
             else:
                 self.spawn_particles("heart", random.randint(1, 2))
         self.anger += clicks
-        if not self.angry and self.anger >= ANGRY_THRESHOLD:
+        self.love = max(0.0, self.love - clicks)
+        if self.loved and self.love < 1.0:
+            self.loved = False
+        if not self.rage and self.anger >= RAGE_THRESHOLD:
+            self._become_rage()
+        elif not self.angry and self.anger >= ANGRY_THRESHOLD:
             self._become_angry()
 
     def _become_angry(self):
         self.angry = True
         self.angry_timer = ANGRY_DURATION
         self.following = False
+        self.loved = False
         self.spawn_particles("anger", 5)
         self.start_talk(random.choice(ANGRY_PHRASES))
 
-    def _update_anger(self):
+    def _become_rage(self):
+        """Boil over: arm himself and go after whoever is poking him."""
+        self.rage = True
+        self.angry = True
+        self.angry_timer = ANGRY_DURATION
+        self.rage_timer = RAGE_DURATION
+        self.weapon = random.choice(WEAPONS)
+        self.following = False
+        self.loved = False
+        self.love = 0.0
+        self.spawn_particles("anger", 8)
+        self.start_talk(random.choice(RAGE_PHRASES))
+
+    # -- Petting / affection ----------------------------------------------
+
+    def observe_cursor(self, mouse):
+        """Detect slow back-and-forth strokes over the pet (petting). Each
+        direction reversal at a gentle speed counts as one stroke. Call once
+        per frame with the global cursor position (or None)."""
+        if mouse is None or self.airborne:
+            self._last_cursor_x = None
+            self._stroke_dir = 0
+            return
+        over = (
+            self.x - 8 <= mouse[0] <= self.x + WINDOW_W + 8
+            and self.y - 8 <= mouse[1] <= self.y + WINDOW_H + 8
+        )
+        if not over:
+            self._last_cursor_x = None
+            self._stroke_dir = 0
+            return
+        if self._last_cursor_x is not None:
+            dx = mouse[0] - self._last_cursor_x
+            if STROKE_MIN_SPEED <= abs(dx) <= STROKE_MAX_SPEED:
+                direction = 1 if dx > 0 else -1
+                if self._stroke_dir and direction != self._stroke_dir:
+                    self._on_pet()
+                self._stroke_dir = direction
+        self._last_cursor_x = mouse[0]
+
+    def _on_pet(self):
+        if self.rage:
+            return  # too furious to be soothed
+        self.love = min(LOVE_MAX, self.love + PET_STROKE_LOVE)
+        self.anger = max(0.0, self.anger - PET_STROKE_CALM)
+        if self.angry and self.anger < 1.0:
+            self.angry = False
+        if not self.loved and self.love >= LOVE_THRESHOLD:
+            self._become_loved()
+        elif random.random() < 0.2:
+            self.spawn_particles("heart", 1)
+
+    def _become_loved(self):
+        self.loved = True
+        self.loved_timer = LOVE_DURATION
+        self.angry = False
+        self.spawn_particles("heart", 5)
+        self.start_talk(random.choice(LOVE_PHRASES))
+
+    def _update_mood(self):
         self.anger = max(0.0, self.anger - ANGER_DECAY)
+        self.love = max(0.0, self.love - LOVE_DECAY)
+        if self.rage:
+            self.rage_timer -= 1
+            if self.rage_timer <= 0 and self.anger < 1.0:
+                self.rage = False
+                self.weapon = None
         if self.angry:
             self.angry_timer -= 1
-            if self.angry_timer <= 0 and self.anger < 1.0:
+            if self.angry_timer <= 0 and self.anger < 1.0 and not self.rage:
                 self.angry = False
+        if self.loved:
+            self.loved_timer -= 1
+            if self.loved_timer <= 0 and self.love < 1.0:
+                self.loved = False
+
+    def _update_rage(self, mouse):
+        """Charge horizontally at the cursor, lashing out when close."""
+        if mouse is None:
+            self.vx *= 0.8
+            self.state = State.IDLE
+            return
+        dx = mouse[0] - self._feet_x()
+        if abs(dx) > 8:
+            direction = 1 if dx > 0 else -1
+            self.vx = direction * RAGE_CHASE_SPEED
+            self.state = State.RUN
+        else:
+            self.vx = 0.0
+            self.state = State.IDLE
+            if random.random() < 0.2:
+                self.spawn_particles("anger", 1)
+        self.state_timer = 30
 
     def _maybe_follow_mouse(self, mouse):
         if self.angry or self.following:
@@ -304,25 +444,35 @@ class Pet:
         self.speech_cooldown = max(0, self.speech_cooldown - 1)
         self._update_face()
         self._update_particles()
-        self._update_anger()
+        self._update_mood()
         self._maybe_idle_fx()
 
-        if self.talking and self._update_talking():
-            return
-
-        if not self.talking and not self.airborne and self.state != State.JUMP:
-            self._maybe_talk()
+        if self.rage:
+            # Armed and furious: keep the speech bubble counting down but never
+            # let it root him in place — he chases the cursor instead.
             if self.talking:
+                self.speech_timer -= 1
+                if self.speech_timer <= 0:
+                    self._stop_talking(repick=False)
+            if not self.airborne and self.state != State.JUMP:
+                self._update_rage(mouse)
+        else:
+            if self.talking and self._update_talking():
                 return
 
-        if self.following:
-            self._update_follow(mouse)
-        elif mouse is not None and not self.airborne and self.state != State.JUMP:
-            self._maybe_follow_mouse(mouse)
+            if not self.talking and not self.airborne and self.state != State.JUMP:
+                self._maybe_talk()
+                if self.talking:
+                    return
 
-        if not self.following and not self.airborne and self.state != State.JUMP:
-            if not self._maybe_drop_through_platform():
-                self._maybe_jump_to_window(platforms)
+            if self.following:
+                self._update_follow(mouse)
+            elif mouse is not None and not self.airborne and self.state != State.JUMP:
+                self._maybe_follow_mouse(mouse)
+
+            if not self.following and not self.airborne and self.state != State.JUMP:
+                if not self._maybe_drop_through_platform():
+                    self._maybe_jump_to_window(platforms)
 
         if self.airborne or self.state == State.JUMP:
             self.jump_vy += GRAVITY

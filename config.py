@@ -90,6 +90,38 @@ ANGRY_THRESHOLD = 3                  # Clicks (before cooling down) that anger t
 ANGRY_DURATION = 240                 # Frames the pet stays grumpy (~4s).
 ANGER_DECAY = 0.015                  # Anger cooled per frame.
 
+# Rage / violence -----------------------------------------------------------
+RAGE_THRESHOLD = 6                   # Total anger that tips him into violence.
+RAGE_DURATION = 420                  # Frames he stays violent (~7s) once calm.
+RAGE_CHASE_SPEED = 3.4               # How fast he charges the cursor when armed.
+WEAPONS = ["knife", "sword", "pistol"]
+
+# Petting / love ------------------------------------------------------------
+# Petting is a slow back-and-forth stroke of the cursor over the pet. Each
+# direction reversal at a gentle speed counts as one stroke.
+STROKE_MIN_SPEED = 1.5               # Min cursor px/frame to count as a stroke.
+STROKE_MAX_SPEED = 22.0              # Above this it's a flick, not a stroke.
+PET_STROKE_LOVE = 0.9                # Love gained per stroke.
+PET_STROKE_CALM = 0.6                # Anger soothed per stroke.
+LOVE_THRESHOLD = 4                   # Love needed before he feels loved.
+LOVE_MAX = 8.0                       # Love is capped here.
+LOVE_DURATION = 360                  # Frames he stays smitten (~6s) once love fades.
+LOVE_DECAY = 0.01                    # Love cooled per frame.
+
+# Breeding ------------------------------------------------------------------
+CHILD_LIFESPAN_MIN = 12 * FPS        # Shortest a spawned child sticks around (~12s).
+CHILD_LIFESPAN_MAX = 90 * FPS        # Longest a spawned child sticks around (~90s).
+MAX_PETS = 12                        # Hard cap so breeding can't run away.
+
+# Weapon pixel art ----------------------------------------------------------
+WEAPON_SCALE = 3
+STEEL_COLOR = (206, 212, 224, 255)
+STEEL_SHADE = (150, 158, 172, 255)
+HANDLE_COLOR = (120, 72, 40, 255)
+GUARD_COLOR = (222, 182, 64, 255)
+GUN_COLOR = (58, 60, 70, 255)
+GUN_GRIP_COLOR = (120, 72, 40, 255)
+
 ANGRY_PHRASES = [
     "Hey!",
     "Stop poking me!",
@@ -155,4 +187,40 @@ PHRASES = [
     "Crush that to-do list!",
     "Boop! Now work.",
     "Stay hungry, stay foolish.",
+]
+
+LOVE_PHRASES = [
+    "I love you!",
+    "You're the best!",
+    "More pets, please!",
+    "So cozy.",
+    "Purrrr.",
+    "Best human ever.",
+    "Aww, hi!",
+    "You're so kind.",
+    "I feel loved!",
+    "Tee-hee!",
+    "My favorite person.",
+    "Pet me forever?",
+    "Heart you!",
+    "Cuddles!",
+    "You make me happy.",
+]
+
+RAGE_PHRASES = [
+    "I'll get you!",
+    "Come here!",
+    "You asked for it!",
+    "RAAAGH!",
+    "No more nice pet!",
+    "Taste this!",
+    "You're done!",
+    "Run while you can!",
+    "Off with you!",
+    "I warned you!",
+    "Feel my wrath!",
+    "En garde!",
+    "Bang bang!",
+    "Get back here!",
+    "This is your fault!",
 ]

@@ -16,6 +16,10 @@ from config import (
     BUBBLE_TEXT_COLOR,
     CLEAR,
     EYE_COLOR,
+    GUARD_COLOR,
+    GUN_COLOR,
+    GUN_GRIP_COLOR,
+    HANDLE_COLOR,
     HEART_COLOR,
     HIGHLIGHT,
     PARTICLE_SCALE,
@@ -24,10 +28,14 @@ from config import (
     SPRITE_H,
     SPRITE_W,
     STAR_COLOR,
+    STEEL_COLOR,
+    WEAPON_SCALE,
     WINDOW_H,
     WINDOW_W,
 )
 from pet import State
+
+BLUSH_COLOR = (255, 150, 170, 255)
 
 
 def px(surface, x, y, color):
@@ -248,6 +256,57 @@ def particle_sprite(kind):
     return sprite
 
 
+# Pixel weapons, drawn pointing right (the main loop flips them to match the
+# pet's facing). Each maps pattern characters to colours.
+KNIFE_PIXELS = [
+    "        #   ",
+    "==== #####  ",
+    "==== #######",
+    "==== #####  ",
+    "        #   ",
+]
+SWORD_PIXELS = [
+    "   |            ",
+    "===|############",
+    "===|############",
+    "===|############",
+    "   |            ",
+]
+PISTOL_PIXELS = [
+    "  ######    ",
+    "  #######   ",
+    "=########   ",
+    "==###       ",
+    " ==         ",
+    "            ",
+]
+WEAPON_PIXELS = {
+    "knife": (KNIFE_PIXELS, {"#": STEEL_COLOR, "=": HANDLE_COLOR}),
+    "sword": (SWORD_PIXELS, {"#": STEEL_COLOR, "|": GUARD_COLOR, "=": HANDLE_COLOR}),
+    "pistol": (PISTOL_PIXELS, {"#": GUN_COLOR, "=": GUN_GRIP_COLOR}),
+}
+_WEAPON_CACHE = {}
+
+
+def draw_weapon(kind):
+    """Return a scaled weapon sprite, pointing right, cached per kind."""
+    sprite = _WEAPON_CACHE.get(kind)
+    if sprite is None:
+        pattern, colors = WEAPON_PIXELS[kind]
+        h = len(pattern)
+        w = len(pattern[0])
+        base = pygame.Surface((w, h), pygame.SRCALPHA)
+        base.fill(CLEAR)
+        for y, row in enumerate(pattern):
+            for x, cell in enumerate(row):
+                color = colors.get(cell)
+                if color is not None:
+                    base.set_at((x, y), color)
+        sprite = pygame.transform.scale(base, (w * WEAPON_SCALE, h * WEAPON_SCALE))
+        _WEAPON_CACHE[kind] = sprite
+    return sprite
+
+
 def draw_pet_frame(pet):
     small = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
     small.fill(CLEAR)
@@ -291,7 +350,15 @@ def draw_pet_frame(pet):
     eye_y = body_y + 4
     left_eye_x = 7 + pet.look_offset
     right_eye_x = 12 + pet.look_offset
-    if pet.blink:
+    if pet.loved and not pet.angry:
+        # Smitten: happy upward-arc eyes and rosy cheeks.
+        for ex in (left_eye_x, right_eye_x):
+            px(small, ex - 1, eye_y + 1, EYE_COLOR)
+            px(small, ex, eye_y, EYE_COLOR)
+            px(small, ex + 1, eye_y + 1, EYE_COLOR)
+        px(small, left_eye_x - 1, eye_y + 2, BLUSH_COLOR)
+        px(small, right_eye_x + 1, eye_y + 2, BLUSH_COLOR)
+    elif pet.blink:
         rect(small, left_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
         rect(small, right_eye_x, eye_y + 1, 2, 1, EYE_COLOR)
     else:
@@ -315,6 +382,12 @@ def draw_pet_frame(pet):
         px(small, 10, mouth_y, EYE_COLOR)
         px(small, 11, mouth_y, EYE_COLOR)
         px(small, 12, mouth_y + 1, EYE_COLOR)
+    elif pet.loved:
+        # Upturned smile.
+        px(small, 8, mouth_y, EYE_COLOR)
+        px(small, 9, mouth_y + 1, EYE_COLOR)
+        px(small, 10, mouth_y + 1, EYE_COLOR)
+        px(small, 11, mouth_y, EYE_COLOR)
     elif pet.state == State.RUN:
         rect(small, 9, mouth_y, 2, 1, EYE_COLOR)
     elif pet.state == State.JUMP:
