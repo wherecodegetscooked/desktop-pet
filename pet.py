@@ -57,6 +57,76 @@ MAX_TARGET_DISTANCE = 0.3           # Fraction of screen width considered reacha
 MAX_TARGET_HEIGHT = 1.5              # Fraction of screen height considered reachable.
 MIN_PLATFORM_Y = 0                   # Allows high ledges where pet stands off-screen.
 
+# Speech tuning -------------------------------------------------------------
+SPEAK_CHANCE = 0.012                  # Per-frame chance to start talking (off cooldown).
+SPEAK_COOLDOWN_MIN = 360              # Min frames of silence between lines (~6s).
+SPEAK_COOLDOWN_MAX = 1200             # Max frames of silence between lines (~20s).
+SPEECH_MIN_FRAMES = 150              # Shortest time a bubble stays up (~2.5s).
+SPEECH_PER_CHAR = 6                  # Extra frames shown per character of text.
+
+# Pixel speech bubble dimensions.
+BUBBLE_SCALE = 3                     # Nearest-neighbour upscale for the pixel look.
+BUBBLE_MAX_TEXT_W = 96               # Wrap width in base (pre-scale) pixels.
+BUBBLE_CANVAS_W = 380                # Window canvas, must hold the widest bubble.
+BUBBLE_CANVAS_H = 200
+BUBBLE_TEXT_COLOR = (40, 30, 28, 255)
+BUBBLE_FILL_COLOR = (255, 250, 235, 255)
+
+PHRASES = [
+    "Go work!",
+    "Back to work!",
+    "Focus, human!",
+    "No slacking!",
+    "You got this!",
+    "Ship it!",
+    "Just one more task.",
+    "Deep breath. Begin.",
+    "Eyes on the prize!",
+    "Stop scrolling!",
+    "Hydrate!",
+    "Drink some water.",
+    "Stretch your legs.",
+    "Sit up straight!",
+    "Blink. Rest your eyes.",
+    "Take a tiny break.",
+    "Snack time?",
+    "You're doing great.",
+    "Almost there!",
+    "Keep going!",
+    "One step at a time.",
+    "Save your work!",
+    "Did you commit?",
+    "Push to main!",
+    "Write the tests.",
+    "Read the docs.",
+    "Refactor later.",
+    "Ship now, polish later.",
+    "Coffee break!",
+    "Tabs or spaces?",
+    "It works on my machine!",
+    "Have you tried turning it off?",
+    "Bug? Or feature?",
+    "Rubber duck me!",
+    "Commit early, commit often.",
+    "Less talk, more code.",
+    "Inbox zero, maybe?",
+    "Plan, then do.",
+    "Small wins count.",
+    "Procrastination later!",
+    "I believe in you.",
+    "Touch grass soon!",
+    "Posture check!",
+    "Are we there yet?",
+    "Mmm, pixels.",
+    "I'm watching you.",
+    "Don't give up!",
+    "Make it happen!",
+    "Today is the day!",
+    "Crush that to-do list!",
+    "Boop! Now work.",
+    "Stay hungry, stay foolish.",
+]
+
 
 class State:
     IDLE = "IDLE"
@@ -338,9 +408,10 @@ class WindowTracker:
 
 
 class MacOverlay:
-    def __init__(self, width, height):
+    def __init__(self, width, height, interactive=True):
         self.width = width
         self.height = height
+        self.interactive = interactive
         self.objc = _objc_setup()
         self.cg = self._load_core_graphics()
         self.colorspace = self.cg.CGColorSpaceCreateDeviceRGB()
@@ -444,7 +515,13 @@ class MacOverlay:
         _msg(objc, self.window, "setOpaque:", False, argtypes=[ctypes.c_bool])
         _msg(objc, self.window, "setBackgroundColor:", clear)
         _msg(objc, self.window, "setHasShadow:", False, argtypes=[ctypes.c_bool])
-        _msg(objc, self.window, "setIgnoresMouseEvents:", False, argtypes=[ctypes.c_bool])
+        _msg(
+            objc,
+            self.window,
+            "setIgnoresMouseEvents:",
+            not self.interactive,
+            argtypes=[ctypes.c_bool],
+        )
         _msg(objc, self.window, "setCanHide:", False, argtypes=[ctypes.c_bool])
         _msg(objc, self.window, "setReleasedWhenClosed:", False, argtypes=[ctypes.c_bool])
         _msg(objc, self.window, "setAlphaValue:", 1.0, argtypes=[ctypes.c_double])
@@ -474,7 +551,8 @@ class MacOverlay:
         _msg(objc, self.layer, "setMagnificationFilter:", nearest)
         _msg(objc, self.layer, "setMinificationFilter:", nearest)
         _msg(objc, self.window, "orderFrontRegardless")
-        self._create_status_menu()
+        if self.interactive:
+            self._create_status_menu()
 
     def _create_status_menu(self):
         objc = self.objc
@@ -743,6 +821,12 @@ class Pet:
         self.platform = None
         self.jump_target = None
         self.jump_cooldown = 0
+        self.talking = False
+        self.speech_text = ""
+        self.speech_timer = 0
+        self.speech_cooldown = random.randint(120, 600)
+        self.speech_dirty = False
+        self.speech_surface = None
         self.pick_state()
 
     def set_bounds(self, bounds):
@@ -754,6 +838,51 @@ class Pet:
         self.min_x, self.min_y, self.max_x, self.max_y = bounds
         self.screen_w = self.max_x - self.min_x
         self.screen_h = self.max_y - self.min_y
+
+    def start_talk(self, text):
+        self.talking = True
+        self.speech_text = text
+        self.speech_dirty = True
+        self.speech_surface = None
+        self.speech_timer = max(SPEECH_MIN_FRAMES, len(text) * SPEECH_PER_CHAR)
+        self.state = State.IDLE
+        self.vx = 0.0
+        self.vy = 0.0
+
+    def _maybe_talk(self):
+        if self.speech_cooldown > 0:
+            return
+        if self.state not in (State.IDLE, State.WALK):
+            return
+        if random.random() > SPEAK_CHANCE:
+            return
+        self.start_talk(random.choice(PHRASES))
+
+    def _update_talking(self):
+        """Keep the pet planted while a bubble is up. Returns True if the rest
+        of update() should be skipped this frame."""
+        self.speech_timer -= 1
+        if self.airborne:
+            self._stop_talking(repick=False)
+            return False
+        if self.speech_timer <= 0:
+            self._stop_talking(repick=True)
+            return False
+        self.state = State.IDLE
+        self.vx = 0.0
+        self.vy = 0.0
+        if self.platform and self._feet_inside_platform(self.platform):
+            self.y = self.platform["y"] - WINDOW_H
+        return True
+
+    def _stop_talking(self, repick):
+        self.talking = False
+        self.speech_text = ""
+        self.speech_surface = None
+        self.speech_dirty = False
+        self.speech_cooldown = random.randint(SPEAK_COOLDOWN_MIN, SPEAK_COOLDOWN_MAX)
+        if repick and not self.airborne:
+            self.pick_state()
 
     def pick_state(self):
         r = random.random()
@@ -817,7 +946,16 @@ class Pet:
         self.frame += 1
         self.state_timer -= 1
         self.jump_cooldown = max(0, self.jump_cooldown - 1)
+        self.speech_cooldown = max(0, self.speech_cooldown - 1)
         self._update_face()
+
+        if self.talking and self._update_talking():
+            return
+
+        if not self.talking and not self.airborne and self.state != State.JUMP:
+            self._maybe_talk()
+            if self.talking:
+                return
 
         if not self.airborne and self.state != State.JUMP:
             if not self._maybe_drop_through_platform():
@@ -920,6 +1058,8 @@ class Pet:
         self.jump_target = None
         self.state = State.IDLE
         self.state_timer = 60
+        if self.talking:
+            self._stop_talking(repick=False)
 
     def drop(self):
         self.airborne = True
@@ -1055,6 +1195,148 @@ def rect(surface, x, y, w, h, color):
             px(surface, xx, yy, color)
 
 
+# Hand-rolled 5x7 pixel font (SDL_ttf is unavailable on this Python build, and
+# a bitmap font keeps the retro look and the bundle dependency-free). Text is
+# upper-cased before rendering. Unknown glyphs fall back to "?".
+GLYPH_W = 5
+GLYPH_H = 7
+SPACE_W = 3
+GLYPH_GAP = 1
+LINE_GAP = 2
+
+FONT_5x7 = {
+    "A": [" ### ", "#   #", "#   #", "#####", "#   #", "#   #", "#   #"],
+    "B": ["#### ", "#   #", "#   #", "#### ", "#   #", "#   #", "#### "],
+    "C": [" ####", "#    ", "#    ", "#    ", "#    ", "#    ", " ####"],
+    "D": ["#### ", "#   #", "#   #", "#   #", "#   #", "#   #", "#### "],
+    "E": ["#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#####"],
+    "F": ["#####", "#    ", "#    ", "#### ", "#    ", "#    ", "#    "],
+    "G": [" ####", "#    ", "#    ", "#  ##", "#   #", "#   #", " ####"],
+    "H": ["#   #", "#   #", "#   #", "#####", "#   #", "#   #", "#   #"],
+    "I": ["#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "#####"],
+    "J": ["#####", "    #", "    #", "    #", "#   #", "#   #", " ### "],
+    "K": ["#   #", "#  # ", "# #  ", "##   ", "# #  ", "#  # ", "#   #"],
+    "L": ["#    ", "#    ", "#    ", "#    ", "#    ", "#    ", "#####"],
+    "M": ["#   #", "## ##", "# # #", "# # #", "#   #", "#   #", "#   #"],
+    "N": ["#   #", "##  #", "# # #", "# # #", "#  ##", "#   #", "#   #"],
+    "O": [" ### ", "#   #", "#   #", "#   #", "#   #", "#   #", " ### "],
+    "P": ["#### ", "#   #", "#   #", "#### ", "#    ", "#    ", "#    "],
+    "Q": [" ### ", "#   #", "#   #", "#   #", "# # #", "#  # ", " ## #"],
+    "R": ["#### ", "#   #", "#   #", "#### ", "# #  ", "#  # ", "#   #"],
+    "S": [" ####", "#    ", "#    ", " ### ", "    #", "    #", "#### "],
+    "T": ["#####", "  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "  #  "],
+    "U": ["#   #", "#   #", "#   #", "#   #", "#   #", "#   #", " ### "],
+    "V": ["#   #", "#   #", "#   #", "#   #", "#   #", " # # ", "  #  "],
+    "W": ["#   #", "#   #", "#   #", "# # #", "# # #", "## ##", "#   #"],
+    "X": ["#   #", "#   #", " # # ", "  #  ", " # # ", "#   #", "#   #"],
+    "Y": ["#   #", "#   #", " # # ", "  #  ", "  #  ", "  #  ", "  #  "],
+    "Z": ["#####", "    #", "   # ", "  #  ", " #   ", "#    ", "#####"],
+    "!": ["  #  ", "  #  ", "  #  ", "  #  ", "  #  ", "     ", "  #  "],
+    "?": [" ### ", "#   #", "    #", "   # ", "  #  ", "     ", "  #  "],
+    ".": ["     ", "     ", "     ", "     ", "     ", " ##  ", " ##  "],
+    ",": ["     ", "     ", "     ", "     ", " ##  ", " ##  ", "#    "],
+    "'": ["  #  ", "  #  ", "  #  ", "     ", "     ", "     ", "     "],
+    "-": ["     ", "     ", "     ", "#####", "     ", "     ", "     "],
+    ":": ["     ", " ##  ", " ##  ", "     ", " ##  ", " ##  ", "     "],
+}
+
+
+def _char_width(ch):
+    if ch == " ":
+        return SPACE_W
+    return GLYPH_W
+
+
+def _text_width(text):
+    width = 0
+    for ch in text:
+        width += _char_width(ch) + GLYPH_GAP
+    return max(0, width - GLYPH_GAP)
+
+
+def _wrap_lines(text, max_w):
+    lines = []
+    current = ""
+    for word in text.split():
+        trial = word if not current else current + " " + word
+        if _text_width(trial) <= max_w or not current:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines or [""]
+
+
+def render_pixel_text(text, color):
+    text = text.upper()
+    width = max(1, _text_width(text))
+    surface = pygame.Surface((width, GLYPH_H), pygame.SRCALPHA)
+    surface.fill(CLEAR)
+    x = 0
+    for ch in text:
+        if ch == " ":
+            x += SPACE_W + GLYPH_GAP
+            continue
+        glyph = FONT_5x7.get(ch, FONT_5x7["?"])
+        for row, line in enumerate(glyph):
+            for col, cell in enumerate(line):
+                if cell == "#":
+                    surface.set_at((x + col, row), color)
+        x += GLYPH_W + GLYPH_GAP
+    return surface
+
+
+def draw_speech_bubble(text):
+    """Render a pixel speech bubble: cream box, dark border, downward tail."""
+    lines = _wrap_lines(text, BUBBLE_MAX_TEXT_W)
+    rendered = [render_pixel_text(line, BUBBLE_TEXT_COLOR) for line in lines]
+    line_h = GLYPH_H + LINE_GAP
+    text_w = max(s.get_width() for s in rendered)
+    text_h = line_h * len(rendered) - LINE_GAP
+
+    pad = 3
+    border = 1
+    tail_h = 4
+    tail_w = 8
+    body_w = text_w + pad * 2 + border * 2
+    body_h = text_h + pad * 2 + border * 2
+    base = pygame.Surface((body_w, body_h + tail_h), pygame.SRCALPHA)
+    base.fill(CLEAR)
+
+    pygame.draw.rect(base, BUBBLE_TEXT_COLOR, pygame.Rect(0, 0, body_w, body_h))
+    pygame.draw.rect(
+        base,
+        BUBBLE_FILL_COLOR,
+        pygame.Rect(border, border, body_w - border * 2, body_h - border * 2),
+    )
+    # Trim the four corner pixels for a softly rounded pixel edge.
+    for corner in [(0, 0), (body_w - 1, 0), (0, body_h - 1), (body_w - 1, body_h - 1)]:
+        base.set_at(corner, CLEAR)
+
+    for i, surface in enumerate(rendered):
+        x = border + pad + (text_w - surface.get_width()) // 2
+        base.blit(surface, (x, border + pad + i * line_h))
+
+    # Downward tail centred on the bubble, pointing at the pet's head.
+    cx = body_w // 2
+    pygame.draw.polygon(
+        base,
+        BUBBLE_TEXT_COLOR,
+        [(cx - tail_w // 2, body_h - 1), (cx + tail_w // 2, body_h - 1), (cx, body_h - 1 + tail_h)],
+    )
+    pygame.draw.polygon(
+        base,
+        BUBBLE_FILL_COLOR,
+        [(cx - tail_w // 2 + 1, body_h - 2), (cx + tail_w // 2 - 1, body_h - 2), (cx, body_h - 3 + tail_h)],
+    )
+
+    return pygame.transform.scale(
+        base, (base.get_width() * BUBBLE_SCALE, base.get_height() * BUBBLE_SCALE)
+    )
+
+
 def draw_pet_frame(pet):
     small = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
     small.fill(CLEAR)
@@ -1139,15 +1421,18 @@ def main():
 
     pygame.init()
     overlay = MacOverlay(WINDOW_W, WINDOW_H)
+    bubble = MacOverlay(BUBBLE_CANVAS_W, BUBBLE_CANVAS_H, interactive=False)
     display_rects, bounds = overlay.refresh_displays()
     window_tracker = WindowTracker(display_rects, bounds)
     platforms = window_tracker.platforms()
     pet = Pet(bounds)
     pet.place_on_best_platform(platforms)
     canvas = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
+    bubble_canvas = pygame.Surface((BUBBLE_CANVAS_W, BUBBLE_CANVAS_H), pygame.SRCALPHA)
     clock = pygame.time.Clock()
     last_reassert = 0.0
     last_window_scan = 0.0
+    bubble_visible = False
 
     while running:
         now = time.monotonic()
@@ -1180,8 +1465,29 @@ def main():
         overlay.move(round(pet.x), round(pet.y))
         overlay.show_surface(canvas)
 
+        if pet.talking:
+            if pet.speech_dirty or pet.speech_surface is None:
+                pet.speech_surface = draw_speech_bubble(pet.speech_text)
+                pet.speech_dirty = False
+            surf = pet.speech_surface
+            bubble_canvas.fill(CLEAR)
+            bx = (BUBBLE_CANVAS_W - surf.get_width()) // 2
+            by = BUBBLE_CANVAS_H - surf.get_height()
+            bubble_canvas.blit(surf, (bx, by))
+            bubble.move(
+                round(pet.x + WINDOW_W / 2 - BUBBLE_CANVAS_W / 2),
+                round(pet.y - BUBBLE_CANVAS_H + 10),
+            )
+            bubble.show_surface(bubble_canvas)
+            bubble_visible = True
+        elif bubble_visible:
+            bubble_canvas.fill(CLEAR)
+            bubble.show_surface(bubble_canvas)
+            bubble_visible = False
+
         if now - last_reassert > 0.5:
             overlay.reassert_top()
+            bubble.reassert_top()
             last_reassert = now
 
         clock.tick(FPS)
