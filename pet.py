@@ -144,9 +144,8 @@ def _nsstring_text(objc, ns_string):
 
 
 class WindowTracker:
-    def __init__(self, screen_w, screen_h):
-        self.screen_w = screen_w
-        self.screen_h = screen_h
+    def __init__(self, display_rects, bounds):
+        self.set_desktop(display_rects, bounds)
         self.objc = _objc_setup()
         self.cg = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreGraphics"))
         self.cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
@@ -168,19 +167,48 @@ class WindowTracker:
             )
         }
 
-    def platforms(self):
-        platforms = [
-            {
-                "id": "desktop",
-                "base_id": "desktop",
-                "x": 0,
-                "y": self.screen_h,
-                "w": self.screen_w,
-                "h": 1,
-                "name": GROUND_PLATFORM_NAME,
-                "edge": "ground",
-            }
+    def set_desktop(self, display_rects, bounds):
+        self.displays = display_rects
+        self.bounds = bounds
+        self.min_x, self.min_y, self.max_x, self.max_y = bounds
+
+    def _ground_platforms(self):
+        """One ground platform per display, merging adjacent same-height edges.
+
+        Each display's ground is its bottom edge in global coordinates.
+        Contiguous displays at the same bottom Y are merged so the pet can
+        walk seamlessly across them; displays of differing heights keep their
+        own ground so the pet falls between them naturally.
+        """
+        intervals = [
+            [d["x"], d["x"] + d["w"], d["y"] + d["h"]] for d in self.displays
         ]
+        intervals.sort(key=lambda item: (item[2], item[0]))
+        merged = []
+        for left, right, y in intervals:
+            if merged and merged[-1][2] == y and left <= merged[-1][1] + 1:
+                merged[-1][1] = max(merged[-1][1], right)
+            else:
+                merged.append([left, right, y])
+
+        grounds = []
+        for index, (left, right, y) in enumerate(merged):
+            grounds.append(
+                {
+                    "id": f"desktop:{index}",
+                    "base_id": f"desktop:{index}",
+                    "x": left,
+                    "y": y,
+                    "w": right - left,
+                    "h": 1,
+                    "name": GROUND_PLATFORM_NAME,
+                    "edge": "ground",
+                }
+            )
+        return grounds
+
+    def platforms(self):
+        platforms = self._ground_platforms()
 
         options = WINDOW_LIST_ON_SCREEN_ONLY | WINDOW_LIST_EXCLUDE_DESKTOP
         array = self.cg.CGWindowListCopyWindowInfo(options, 0)
@@ -231,10 +259,14 @@ class WindowTracker:
 
         window_id = _nsnumber_int(self.objc, self._dict_value(info, "kCGWindowNumber"))
         owner = _nsstring_text(self.objc, self._dict_value(info, "kCGWindowOwnerName"))
-        px = int(max(0, x))
-        pw = int(min(w, self.screen_w - px))
-        py = int(max(0, y))
+        left = int(max(self.min_x, x))
+        right = int(min(self.max_x, x + w))
+        px = left
+        pw = right - left
+        py = int(y)
         ph = int(h)
+        if pw < WINDOW_W:
+            return None
         return {
             "id": window_id,
             "x": px,
@@ -248,11 +280,12 @@ class WindowTracker:
         platforms = []
         top_y = window["y"]
         bottom_y = window["y"] + window["h"]
-        if MIN_PLATFORM_Y <= top_y <= self.screen_h - 24:
+        floor = self.max_y - 24
+        if MIN_PLATFORM_Y + self.min_y <= top_y <= floor:
             platforms.extend(
                 self._edge_platforms(window, "top", top_y, occluders)
             )
-        if MIN_PLATFORM_Y <= bottom_y <= self.screen_h - 24:
+        if MIN_PLATFORM_Y + self.min_y <= bottom_y <= floor:
             platforms.extend(
                 self._edge_platforms(window, "bottom", bottom_y, occluders)
             )
@@ -323,6 +356,12 @@ class MacOverlay:
         self.drag_released = False
         self._seen_visible = False
 
+        # Multi-monitor state, populated by refresh_displays().
+        self.display_rects = []
+        self.bounds = (0, 0, self.width, self.height)
+        self.main_height = self.height
+        self.refresh_displays()
+
         self._create_window()
 
     def _resource_path(self, filename):
@@ -335,6 +374,12 @@ class MacOverlay:
         cg.CGMainDisplayID.restype = ctypes.c_uint32
         cg.CGDisplayBounds.restype = CGRect
         cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+        cg.CGGetActiveDisplayList.restype = ctypes.c_int
+        cg.CGGetActiveDisplayList.argtypes = [
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
         cg.CGWindowLevelForKey.restype = ctypes.c_int
         cg.CGWindowLevelForKey.argtypes = [ctypes.c_int]
         cg.CGColorSpaceCreateDeviceRGB.restype = ctypes.c_void_p
@@ -513,13 +558,53 @@ class MacOverlay:
         bounds = self.cg.CGDisplayBounds(self.cg.CGMainDisplayID())
         return int(bounds.x), int(bounds.y), int(bounds.w), int(bounds.h)
 
+    def display_bounds(self):
+        """Return every active display's frame in the global CG space.
+
+        Coordinates may be negative: the main display's top-left is the origin
+        and other monitors are placed relative to it however the user (or a
+        display manager) has arranged them.
+        """
+        max_displays = 32
+        count = ctypes.c_uint32(0)
+        ids = (ctypes.c_uint32 * max_displays)()
+        rects = []
+        if self.cg.CGGetActiveDisplayList(max_displays, ids, ctypes.byref(count)) == 0:
+            for i in range(count.value):
+                bounds = self.cg.CGDisplayBounds(ids[i])
+                if bounds.w <= 0 or bounds.h <= 0:
+                    continue
+                rects.append(
+                    {
+                        "x": int(bounds.x),
+                        "y": int(bounds.y),
+                        "w": int(bounds.w),
+                        "h": int(bounds.h),
+                    }
+                )
+        if not rects:
+            x, y, w, h = self.screen_bounds()
+            rects.append({"x": x, "y": y, "w": w, "h": h})
+        return rects
+
+    def refresh_displays(self):
+        """Re-scan displays so hot-plugging / rearranging monitors works live."""
+        rects = self.display_bounds()
+        min_x = min(d["x"] for d in rects)
+        min_y = min(d["y"] for d in rects)
+        max_x = max(d["x"] + d["w"] for d in rects)
+        max_y = max(d["y"] + d["h"] for d in rects)
+        self.display_rects = rects
+        self.bounds = (min_x, min_y, max_x, max_y)
+        self.main_height = int(self.cg.CGDisplayBounds(self.cg.CGMainDisplayID()).h)
+        return self.display_rects, self.bounds
+
     def reassert_top(self):
         _msg(self.objc, self.window, "setLevel:", self.level, argtypes=[ctypes.c_long])
         _msg(self.objc, self.window, "orderFrontRegardless")
 
     def move(self, x, y):
-        _, _, _, screen_h = self.screen_bounds()
-        flipped_y = screen_h - y - self.height
+        flipped_y = self.main_height - y - self.height
         sel = self.objc.sel_registerName(b"setFrameOrigin:")
         proto = ctypes.CFUNCTYPE(
             ctypes.c_void_p,
@@ -620,11 +705,11 @@ class MacOverlay:
 
     def _drag_top_left(self, NSEvent):
         mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)
-        _, _, screen_w, screen_h = self.screen_bounds()
+        min_x, min_y, max_x, max_y = self.bounds
         x = mouse.x - self.drag_offset.x
-        y = screen_h - (mouse.y - self.drag_offset.y) - self.height
-        x = max(0, min(screen_w - self.width, x))
-        y = max(-self.height * 2, min(screen_h - self.height, y))
+        y = self.main_height - (mouse.y - self.drag_offset.y) - self.height
+        x = max(min_x, min(max_x - self.width, x))
+        y = max(min_y - self.height * 2, min(max_y - self.height, y))
         return x, y
 
     def consume_drag_state(self):
@@ -638,11 +723,10 @@ class MacOverlay:
 
 
 class Pet:
-    def __init__(self, screen_w, screen_h):
-        self.screen_w = screen_w
-        self.screen_h = screen_h
-        self.x = float(screen_w // 2)
-        self.y = float(screen_h // 2)
+    def __init__(self, bounds):
+        self.set_bounds(bounds)
+        self.x = float((self.min_x + self.max_x) // 2)
+        self.y = float((self.min_y + self.max_y) // 2)
         self.vx = 0.0
         self.vy = 0.0
         self.state = State.IDLE
@@ -660,6 +744,16 @@ class Pet:
         self.jump_target = None
         self.jump_cooldown = 0
         self.pick_state()
+
+    def set_bounds(self, bounds):
+        """Update the roamable area to the union of all displays.
+
+        screen_w / screen_h stay as the *span* of the whole desktop so the
+        jump-reachability heuristics keep working across monitors.
+        """
+        self.min_x, self.min_y, self.max_x, self.max_y = bounds
+        self.screen_w = self.max_x - self.min_x
+        self.screen_h = self.max_y - self.min_y
 
     def pick_state(self):
         r = random.random()
@@ -748,19 +842,19 @@ class Pet:
         elif self.vx < -0.1:
             self.facing_right = False
 
-        if self.x < 0:
-            self.x = 0
+        if self.x < self.min_x:
+            self.x = self.min_x
             self.vx = abs(self.vx)
             self.facing_right = True
-        elif self.x + WINDOW_W > self.screen_w:
-            self.x = self.screen_w - WINDOW_W
+        elif self.x + WINDOW_W > self.max_x:
+            self.x = self.max_x - WINDOW_W
             self.vx = -abs(self.vx)
             self.facing_right = False
 
-        if self.y + WINDOW_H > self.screen_h:
-            self.y = self.screen_h - WINDOW_H
+        if self.y + WINDOW_H > self.max_y:
+            self.y = self.max_y - WINDOW_H
             self.airborne = False
-            self.platform = platforms[0] if platforms else None
+            self.platform = self._ground_under_feet(platforms)
             if self.state == State.JUMP:
                 self.jump_cooldown = 30
                 self.pick_state()
@@ -868,6 +962,18 @@ class Pet:
                 if self._feet_inside_platform(candidate):
                     return candidate
         return None
+
+    def _ground_under_feet(self, platforms):
+        foot = self._feet_x()
+        grounds = [
+            platform
+            for platform in platforms
+            if platform["name"] == GROUND_PLATFORM_NAME
+            and platform["x"] <= foot <= platform["x"] + platform["w"]
+        ]
+        if grounds:
+            return min(grounds, key=lambda item: item["y"])
+        return platforms[0] if platforms else None
 
     def _feet_x(self):
         return self.x + WINDOW_W * 0.5
@@ -1033,10 +1139,10 @@ def main():
 
     pygame.init()
     overlay = MacOverlay(WINDOW_W, WINDOW_H)
-    _, _, screen_w, screen_h = overlay.screen_bounds()
-    window_tracker = WindowTracker(screen_w, screen_h)
+    display_rects, bounds = overlay.refresh_displays()
+    window_tracker = WindowTracker(display_rects, bounds)
     platforms = window_tracker.platforms()
-    pet = Pet(screen_w, screen_h)
+    pet = Pet(bounds)
     pet.place_on_best_platform(platforms)
     canvas = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
     clock = pygame.time.Clock()
@@ -1052,6 +1158,9 @@ def main():
         drag = overlay.consume_drag_state()
 
         if now - last_window_scan > 0.75:
+            display_rects, bounds = overlay.refresh_displays()
+            window_tracker.set_desktop(display_rects, bounds)
+            pet.set_bounds(bounds)
             platforms = window_tracker.platforms()
             if not pet.airborne:
                 pet.sync_platforms(platforms)
