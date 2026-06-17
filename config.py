@@ -316,7 +316,9 @@ PHRASES = [
     "Take your time.",
     "Dream big.",
     "Look at how far you've come.",
-    "You make a difference."
+    "You make a difference.",
+    "Keep learning.",
+    "Celebrate small victories.",
 ]
 
 LOVE_PHRASES = [
