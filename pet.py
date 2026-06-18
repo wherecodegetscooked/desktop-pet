@@ -155,8 +155,6 @@ class Pet:
         self.loved_timer = 0
         self._last_cursor_x = None
         self._stroke_dir = 0
-        # Breeding: spawned children carry a lifespan (frames); adults stay None.
-        self.life = None
         # Activity-driven energy: sleep when the machine is idle, get excited
         # when the human types fast, bored when present but not typing.
         self.asleep = False

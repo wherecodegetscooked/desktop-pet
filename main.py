@@ -5,7 +5,7 @@ also owns the menu-bar menu), a second non-interactive overlay per pet for
 effects (speech bubble, particles, weapon), a shared `WindowTracker` for
 platforms, and a `Pet` per pet for behaviour.
 
-Supports multiple pets: the menu-bar "Breed" item spawns a short-lived child,
+Supports multiple pets: the menu-bar "Breed" item spawns a child and
 "Remove a pet" culls the most recent one. Slow strokes over a pet make it
 love you; clicking it too often makes it arm itself and chase the cursor.
 """
@@ -24,8 +24,6 @@ from ball import Ball
 from config import (
     BALL_WIN,
     BUBBLE_GAP,
-    CHILD_LIFESPAN_MAX,
-    CHILD_LIFESPAN_MIN,
     CLEAR,
     FOCUS_MINUTES,
     FPS,
@@ -47,7 +45,7 @@ from render import (
 from window_tracker import WindowTracker
 
 
-def spawn_pet(bounds, platforms, x=None, y=None, child=False, overlay=None):
+def spawn_pet(bounds, platforms, x=None, y=None, overlay=None):
     """Create a pet plus its two overlay windows and drawing canvases.
 
     Pass an existing `overlay` to reuse the menu-owning primary window for the
@@ -61,8 +59,6 @@ def spawn_pet(bounds, platforms, x=None, y=None, child=False, overlay=None):
         pet.x = float(x)
         pet.y = float(y)
     pet.place_on_best_platform(platforms)
-    if child:
-        pet.life = random.randint(CHILD_LIFESPAN_MIN, CHILD_LIFESPAN_MAX)
     return {
         "pet": pet,
         "overlay": overlay,
@@ -228,11 +224,10 @@ def main():
     focus_active = False
     focus_frames_left = 0
     focus_total_frames = FOCUS_MINUTES * 60 * FPS
-    # Fetch ball: a single bouncy ball the pets chase; despawns after resting.
+    # Fetch ball: a single bouncy ball the pets chase. It stays until the user
+    # removes it from the menu bar ("Remove ball").
     ball = None
     ball_overlay = None
-    ball_rest_frames = 0
-    ball_despawn_frames = 6 * FPS
     # Self-update: spawn update.sh, show a bubble briefly, then quit so it can
     # pull the latest and relaunch. Counts down frames before quitting.
     pending_update = 0
@@ -262,7 +257,6 @@ def main():
                     platforms,
                     x=parent.x + offset,
                     y=parent.y,
-                    child=True,
                 )
                 parent.spawn_particles("heart", 4)
                 if focus_active:
@@ -290,9 +284,11 @@ def main():
                     ball_overlay = MacOverlay(BALL_WIN, BALL_WIN, interactive=False)
                 ball = Ball(lead.x + WINDOW_W / 2, lead.y - 50, bounds)
                 ball.kick(random.uniform(-4.0, 4.0), -3.0)
-                ball_rest_frames = 0
-                ball_overlay.reassert_top()  # re-show if it was hidden on despawn
+                ball_overlay.reassert_top()  # re-show if it was hidden on removal
                 lead.spawn_particles("star", 2)
+            elif action == "ball_remove" and ball is not None:
+                ball_overlay.close()
+                ball = None
             elif action == "feed":
                 for entry in pets:
                     entry["pet"].feed()
@@ -349,14 +345,6 @@ def main():
                 pet.observe_cursor(mouse)
             pet.update(platforms, mouse, ball)
 
-        # Retire the ball once it has sat still for a while.
-        if ball is not None:
-            ball_rest_frames = ball_rest_frames + 1 if ball.resting else 0
-            if ball_rest_frames > ball_despawn_frames:
-                ball_overlay.close()
-                ball = None
-                ball_rest_frames = 0
-
         # Pomodoro countdown: when the focus timer elapses, everyone celebrates.
         if focus_active:
             focus_frames_left -= 1
@@ -365,21 +353,6 @@ def main():
                 for entry in pets:
                     entry["pet"].end_focus(party=True)
                 pets[0]["pet"].start_talk("Break time!")
-
-        # Age out bred children whose lifespan has elapsed.
-        survivors = [pets[0]]
-        for entry in pets[1:]:
-            pet = entry["pet"]
-            if pet.life is not None:
-                pet.life -= 1
-                if pet.life <= 0:
-                    entry["overlay"].close()
-                    entry["fx"].close()
-                    if entry is drag_target:
-                        drag_target = None
-                    continue
-            survivors.append(entry)
-        pets = survivors
 
         for entry in pets:
             render_pet(entry, display_rects)

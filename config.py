@@ -125,8 +125,6 @@ LOVE_DURATION = 360                  # Frames he stays smitten (~6s) once love f
 LOVE_DECAY = 0.01                    # Love cooled per frame.
 
 # Breeding ------------------------------------------------------------------
-CHILD_LIFESPAN_MIN = 12 * FPS        # Shortest a spawned child sticks around (~12s).
-CHILD_LIFESPAN_MAX = 90 * FPS        # Longest a spawned child sticks around (~90s).
 MAX_PETS = 12                        # Hard cap so breeding can't run away.
 
 # Idle / AFK sleep ----------------------------------------------------------

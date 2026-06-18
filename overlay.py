@@ -279,6 +279,9 @@ class MacOverlay:
         self._add_menu_item(
             menu, "Toss a ball", "t", self.menu_controller, b"tossBall:"
         )
+        self._add_menu_item(
+            menu, "Remove ball", "", self.menu_controller, b"removeBall:"
+        )
         self._add_menu_item(menu, "Feed", "e", self.menu_controller, b"feedPet:")
         self._add_menu_item(menu, "Recolour", "c", self.menu_controller, b"recolour:")
         self._add_menu_item(menu, "Rename", "n", self.menu_controller, b"renamePet:")
@@ -357,6 +360,7 @@ class MacOverlay:
             (b"startFocus:", "focus_start"),
             (b"stopFocus:", "focus_stop"),
             (b"tossBall:", "ball"),
+            (b"removeBall:", "ball_remove"),
             (b"feedPet:", "feed"),
             (b"recolour:", "recolour"),
             (b"renamePet:", "rename"),
