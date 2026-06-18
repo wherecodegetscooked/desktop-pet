@@ -28,11 +28,22 @@ from config import (
     GUN_COLOR,
     GUN_GRIP_COLOR,
     HANDLE_COLOR,
+    HEADPHONE_BAND,
+    HEADPHONE_CUP,
     HEART_COLOR,
     HIGHLIGHT,
+    LAPTOP_BASE,
+    LAPTOP_KEY,
+    LAPTOP_LID,
+    LAPTOP_LID_EDGE,
+    LAPTOP_LOGO,
+    NOTE_COLOR,
     PARTICLE_SCALE,
     PET_COLOR,
     PET_SHADE,
+    POPCORN_BUCKET,
+    POPCORN_KERNEL,
+    POPCORN_STRIPE,
     QUESTION_COLOR,
     SPRITE_H,
     SPRITE_W,
@@ -261,6 +272,15 @@ SWEAT_PIXELS = [
     "###",
     " # ",
 ]
+NOTE_PIXELS = [
+    "   ##",
+    "   ##",
+    "   # ",
+    "   # ",
+    "## # ",
+    "#### ",
+    "###  ",
+]
 PARTICLE_PIXELS = {
     "heart": (HEART_PIXELS, HEART_COLOR),
     "star": (STAR_PIXELS, STAR_COLOR),
@@ -269,6 +289,7 @@ PARTICLE_PIXELS = {
     "dust": (DUST_PIXELS, DUST_COLOR),
     "sweat": (SWEAT_PIXELS, SWEAT_COLOR),
     "question": (FONT_5x7["?"], QUESTION_COLOR),
+    "note": (NOTE_PIXELS, NOTE_COLOR),
 }
 _PARTICLE_CACHE = {}
 
@@ -366,6 +387,41 @@ def draw_ball():
         ((BALL_WIN - sprite.get_width()) // 2, (BALL_WIN - sprite.get_height()) // 2),
     )
     return canvas
+
+
+def _draw_headphones(small, body_y):
+    """A headphone band over the head with cushioned cups over the ears."""
+    for x in range(6, 14):
+        px(small, x, body_y - 1, HEADPHONE_BAND)
+    px(small, 5, body_y, HEADPHONE_BAND)
+    px(small, 14, body_y, HEADPHONE_BAND)
+    rect(small, 4, body_y + 1, 2, 4, HEADPHONE_CUP)
+    rect(small, 14, body_y + 1, 2, 4, HEADPHONE_CUP)
+
+
+def _draw_popcorn(small, body_y):
+    """A red-and-white striped popcorn tub held at the belly, popped on top."""
+    top = body_y + 7
+    for x in (7, 9, 11):
+        px(small, x, top - 1, POPCORN_KERNEL)
+    rect(small, 7, top, 6, 1, POPCORN_STRIPE)
+    for i, x in enumerate(range(7, 13)):
+        color = POPCORN_BUCKET if i % 2 == 0 else POPCORN_STRIPE
+        rect(small, x, top + 1, 1, 4, color)
+
+
+def _draw_laptop(small, body_y, frame):
+    """An open laptop held at the torso (screen back toward us), with two keys
+    alternately 'pressing' to suggest typing."""
+    lid_top = body_y + 5
+    rect(small, 6, lid_top, 8, 3, LAPTOP_LID)
+    rect(small, 6, lid_top, 8, 1, LAPTOP_LID_EDGE)
+    px(small, 9, lid_top + 1, LAPTOP_LOGO)
+    px(small, 10, lid_top + 1, LAPTOP_LOGO)
+    base_y = lid_top + 3
+    rect(small, 5, base_y, 10, 1, LAPTOP_BASE)
+    rect(small, 5, base_y + 1, 10, 1, LAPTOP_LID)
+    px(small, 8 if (frame // 6) % 2 else 11, base_y, LAPTOP_KEY)
 
 
 def draw_pet_frame(pet):
@@ -537,6 +593,26 @@ def draw_pet_frame(pet):
         px(small, 9, mouth_y, EYE_COLOR)
         px(small, 10, mouth_y + 1, EYE_COLOR)
         px(small, 11, mouth_y, EYE_COLOR)
+
+    # App-aware props: drawn over the body, hidden in moods where they'd look
+    # wrong (asleep, upset, mid-throw). The props are symmetric, so they survive
+    # the facing flip below cleanly.
+    calm = not (
+        pet.asleep
+        or pet.angry
+        or pet.rage
+        or pet.scared
+        or getattr(pet, "tumbling", False)
+        or getattr(pet, "righting", False)
+    )
+    if calm:
+        activity = getattr(pet, "activity", None)
+        if activity == "work":
+            _draw_laptop(small, body_y, pet.frame)
+        elif activity == "video":
+            _draw_popcorn(small, body_y)
+        if getattr(pet, "music", False):
+            _draw_headphones(small, body_y)
 
     if not pet.facing_right:
         small = pygame.transform.flip(small, True, False)

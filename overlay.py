@@ -32,6 +32,8 @@ from config import (
     NSEVENT_LEFT_MOUSE_DOWN,
     NSEVENT_LEFT_MOUSE_DRAGGED,
     NSEVENT_LEFT_MOUSE_UP,
+    WINDOW_LIST_EXCLUDE_DESKTOP,
+    WINDOW_LIST_ON_SCREEN_ONLY,
 )
 from objc_bridge import (
     CGRect,
@@ -39,7 +41,9 @@ from objc_bridge import (
     NSRect,
     NSSize,
     _msg,
+    _nsnumber_int,
     _nsstring,
+    _nsstring_text,
     _objc_setup,
 )
 
@@ -56,6 +60,13 @@ class MacOverlay:
         self._menu_imps = []
         self.objc = _objc_setup()
         self.cg = self._load_core_graphics()
+        self.cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+        self.cf.CFRelease.argtypes = [ctypes.c_void_p]
+        # NSString keys for reading the frontmost window's title (app-awareness).
+        self._win_keys = {
+            name: _nsstring(self.objc, name)
+            for name in ("kCGWindowLayer", "kCGWindowName")
+        }
         self.colorspace = self.cg.CGColorSpaceCreateDeviceRGB()
         self.nsapp = None
         self.status_item = None
@@ -122,6 +133,9 @@ class MacOverlay:
             ctypes.c_int,
         ]
         cg.CGImageRelease.argtypes = [ctypes.c_void_p]
+        # Window list, for reading the frontmost window's title (app-awareness).
+        cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+        cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
         # Input-activity queries for AFK sleep and typing energy.
         cg.CGEventSourceSecondsSinceLastEventType.restype = ctypes.c_double
         cg.CGEventSourceSecondsSinceLastEventType.argtypes = [
@@ -590,6 +604,68 @@ class MacOverlay:
         NSEvent = self.objc.objc_getClass(b"NSEvent")
         mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)
         return (mouse.x, self.main_height - mouse.y)
+
+    def frontmost_app(self):
+        """(bundle_id, localized_name) of the frontmost application, or two
+        empty strings. Needs no special permission."""
+        objc = self.objc
+        NSWorkspace = objc.objc_getClass(b"NSWorkspace")
+        ws = _msg(objc, NSWorkspace, "sharedWorkspace")
+        app = _msg(objc, ws, "frontmostApplication")
+        if not app:
+            return "", ""
+        bundle = _nsstring_text(objc, _msg(objc, app, "bundleIdentifier"))
+        name = _nsstring_text(objc, _msg(objc, app, "localizedName"))
+        return bundle, name
+
+    def running_bundle_ids(self):
+        """Set of bundle ids of currently running apps (background ones too),
+        used to spot music players. Needs no special permission."""
+        objc = self.objc
+        NSWorkspace = objc.objc_getClass(b"NSWorkspace")
+        ws = _msg(objc, NSWorkspace, "sharedWorkspace")
+        apps = _msg(objc, ws, "runningApplications")
+        ids = set()
+        if not apps:
+            return ids
+        count = _msg(objc, apps, "count", restype=ctypes.c_ulong)
+        for i in range(count):
+            app = _msg(objc, apps, "objectAtIndex:", i, argtypes=[ctypes.c_ulong])
+            bundle = _nsstring_text(objc, _msg(objc, app, "bundleIdentifier"))
+            if bundle:
+                ids.add(bundle)
+        return ids
+
+    def active_window_title(self):
+        """Title of the frontmost normal (layer-0) on-screen window, or "".
+
+        Reading window titles needs Screen Recording permission on macOS 10.15+;
+        without it the title comes back empty and the caller falls back to plain
+        app detection.
+        """
+        options = WINDOW_LIST_ON_SCREEN_ONLY | WINDOW_LIST_EXCLUDE_DESKTOP
+        array = self.cg.CGWindowListCopyWindowInfo(options, 0)
+        if not array:
+            return ""
+        try:
+            count = _msg(self.objc, array, "count", restype=ctypes.c_ulong)
+            for i in range(count):
+                info = _msg(
+                    self.objc, array, "objectAtIndex:", i, argtypes=[ctypes.c_ulong]
+                )
+                layer = _nsnumber_int(
+                    self.objc,
+                    _msg(self.objc, info, "objectForKey:", self._win_keys["kCGWindowLayer"]),
+                )
+                if layer != 0:
+                    continue  # skip menubar, our own high-level panels, etc.
+                return _nsstring_text(
+                    self.objc,
+                    _msg(self.objc, info, "objectForKey:", self._win_keys["kCGWindowName"]),
+                )
+        finally:
+            self.cf.CFRelease(array)
+        return ""
 
     def _drag_top_left(self, NSEvent):
         mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)

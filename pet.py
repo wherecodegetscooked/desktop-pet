@@ -64,6 +64,8 @@ from config import (
     MAX_TARGET_JUMP_SPEED_X,
     NORMAL_JUMP_POWER_MAX,
     NORMAL_JUMP_POWER_MIN,
+    NOTE_INTERVAL_MAX,
+    NOTE_INTERVAL_MIN,
     PET_STROKE_CALM,
     PET_STROKE_LOVE,
     PHRASES,
@@ -155,6 +157,12 @@ class Pet:
         self.loved_timer = 0
         self._last_cursor_x = None
         self._stroke_dir = 0
+        # App-aware reactions: what the human is doing right now (set by the
+        # main loop). `activity` is "work" | "video" | "gaming" | None; `music`
+        # is True while a music app is running.
+        self.activity = None
+        self.music = False
+        self._note_timer = random.randint(NOTE_INTERVAL_MIN, NOTE_INTERVAL_MAX)
         # Activity-driven energy: sleep when the machine is idle, get excited
         # when the human types fast, bored when present but not typing.
         self.asleep = False
@@ -345,6 +353,31 @@ class Pet:
         self.idle_fx_timer = random.randint(IDLE_FX_MIN, IDLE_FX_MAX)
         if not self.angry and not self.airborne:
             self.spawn_particles(random.choice(["heart", "star"]), 1)
+
+    def set_activity(self, activity, music):
+        """Reflect what the human is doing this detection tick (see activity.py).
+        Purely visual: the props are drawn by the renderer from these fields."""
+        self.activity = activity
+        self.music = music
+
+    def _activity_fx(self):
+        """Float music notes while music plays; sparkle a little while gaming.
+        Skipped in moods where props are hidden (asleep, upset, mid-throw)."""
+        if (
+            self.airborne
+            or self.asleep
+            or self.angry
+            or self.rage
+            or self.scared
+        ):
+            return
+        if self.music:
+            self._note_timer -= 1
+            if self._note_timer <= 0:
+                self._note_timer = random.randint(NOTE_INTERVAL_MIN, NOTE_INTERVAL_MAX)
+                self.spawn_particles("note", 1)
+        elif self.activity == "gaming" and random.random() < 0.03:
+            self.spawn_particles("star", 1)
 
     # -- Activity / energy -------------------------------------------------
 
@@ -853,6 +886,7 @@ class Pet:
             return
 
         self._maybe_idle_fx()
+        self._activity_fx()
 
         if self.rage:
             # Armed and furious: chase the cursor on foot (jumping across

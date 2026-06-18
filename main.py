@@ -18,6 +18,7 @@ import time
 
 import pygame
 
+import activity
 import updater
 
 from ball import Ball
@@ -219,6 +220,7 @@ def main():
     clock = pygame.time.Clock()
     last_reassert = 0.0
     last_window_scan = 0.0
+    last_activity_scan = 0.0
     drag_target = None
     last_key_count = None
     focus_active = False
@@ -315,6 +317,23 @@ def main():
             if ball is not None:
                 ball.set_bounds(bounds)
             last_window_scan = now
+
+        # App-aware reactions: notice what the human is doing and tell every pet
+        # so it can show the matching prop (laptop / popcorn / headphones).
+        if now - last_activity_scan > 0.5:
+            bundle, app_name = primary.frontmost_app()
+            title = (
+                primary.active_window_title()
+                if activity.needs_title(bundle, app_name)
+                else ""
+            )
+            running = primary.running_bundle_ids()
+            context, music = activity.classify(
+                bundle, app_name, title, running, focus_active
+            )
+            for entry in pets:
+                entry["pet"].set_activity(context, music)
+            last_activity_scan = now
 
         # Drag: only a gesture that actually moved counts as a drag, so a plain
         # click never sticks a pet as the drag target (which would freeze it).

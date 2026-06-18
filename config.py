@@ -93,6 +93,24 @@ DUST_COLOR = (205, 198, 186, 255)
 SWEAT_COLOR = (120, 195, 235, 255)
 QUESTION_COLOR = (255, 236, 150, 255)
 FOOD_COLOR = (235, 150, 90, 255)
+NOTE_COLOR = (176, 150, 240, 255)
+
+# App-aware activity props --------------------------------------------------
+# The pet reacts to what you're doing: it works on a laptop during a focus
+# session or in an editor, munches popcorn while a video plays, and wears
+# headphones (with floating notes) whenever music is running.
+NOTE_INTERVAL_MIN = 26               # Frames between floating music notes.
+NOTE_INTERVAL_MAX = 60
+LAPTOP_LID = (70, 74, 84, 255)
+LAPTOP_LID_EDGE = (120, 126, 140, 255)
+LAPTOP_BASE = (152, 158, 170, 255)
+LAPTOP_KEY = (44, 48, 56, 255)
+LAPTOP_LOGO = (150, 210, 255, 255)
+POPCORN_BUCKET = (214, 72, 66, 255)
+POPCORN_STRIPE = (246, 246, 246, 255)
+POPCORN_KERNEL = (250, 226, 130, 255)
+HEADPHONE_BAND = (52, 56, 68, 255)
+HEADPHONE_CUP = (74, 80, 96, 255)
 
 # Mouse interaction --------------------------------------------------------
 FOLLOW_CHANCE = 0.004                # Per-frame chance to start chasing the cursor.
