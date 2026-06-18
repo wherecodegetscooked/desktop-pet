@@ -129,6 +129,12 @@ RAGE_THRESHOLD = 6                   # Total anger that tips him into violence.
 RAGE_DURATION = 420                  # Frames he stays violent (~7s) once calm.
 RAGE_CHASE_SPEED = 3.4               # How fast he charges the cursor when armed.
 WEAPONS = ["knife", "sword", "pistol"]
+# Capturing the cursor: once he reaches it he locks on for a beat (you can
+# still flee the radius to break it), then a pistol shoots it across the screen
+# while a blade pins it in place.
+RAGE_CAPTURE_RADIUS = 74             # Cursor within this (px of his centre) to lock on.
+RAGE_CHARGE_FRAMES = 90              # Aiming time before he fires (~1.5s to escape).
+RAGE_LOCK_FRAMES = 72                # Frames the cursor stays pinned when locked (~1.2s).
 
 # Petting / love ------------------------------------------------------------
 # Petting is a slow back-and-forth stroke of the cursor over the pet. Each
@@ -144,6 +150,24 @@ LOVE_DECAY = 0.01                    # Love cooled per frame.
 
 # Breeding ------------------------------------------------------------------
 MAX_PETS = 12                        # Hard cap so breeding can't run away.
+
+# Personality & social ------------------------------------------------------
+# Each pet gets a temperament that scales its behaviour: how much it idles vs
+# moves, how fast, how often it jumps, how sociable it is, how quickly it
+# angers, and how playful it is. Bred children inherit a blend of their
+# parents'. Sociable pets wander over to each other and trade hearts.
+PERSONALITIES = [
+    {"name": "Lazy",    "idle": 1.9, "speed": 0.8,  "jump": 0.5, "social": 0.8, "anger": 0.9, "play": 0.8},
+    {"name": "Hyper",   "idle": 0.5, "speed": 1.3,  "jump": 1.7, "social": 1.2, "anger": 1.0, "play": 1.5},
+    {"name": "Clingy",  "idle": 1.0, "speed": 1.05, "jump": 0.9, "social": 2.4, "anger": 0.8, "play": 1.2},
+    {"name": "Grumpy",  "idle": 1.3, "speed": 0.95, "jump": 0.8, "social": 0.5, "anger": 1.7, "play": 0.7},
+    {"name": "Playful", "idle": 0.8, "speed": 1.1,  "jump": 1.2, "social": 1.7, "anger": 0.9, "play": 1.9},
+    {"name": "Calm",    "idle": 1.3, "speed": 0.9,  "jump": 0.7, "social": 1.0, "anger": 0.7, "play": 1.0},
+]
+PERSONALITY_TRAITS = ("idle", "speed", "jump", "social", "anger", "play")
+SOCIAL_CHANCE = 0.004                # Per-frame base chance to wander to another pet.
+SOCIAL_REACH = 30                    # Distance (px) at which a greeting happens.
+SOCIAL_GREET_LOVE = 1.6              # Love gained from a friendly greeting.
 
 # Idle / AFK sleep ----------------------------------------------------------
 # When the whole machine sees no keyboard or mouse for this long, the pet curls
@@ -337,6 +361,59 @@ PHRASES = [
     "Keep learning.",
     "Celebrate small victories.",
     "Don't forget to eat!",
+        "Honey never spoils.",
+    "Wombat poop is cube-shaped.",
+    "Bananas are technically berries, but strawberries are not.",
+    "A day on Venus is longer than a year on Venus.",
+    "A flock of flamingos is called a flamboyance.",
+    "Banging your head against a wall for one hour burns 150 calories.",
+    "Pteronophobia is the fear of being tickled by feathers.",
+    "A hippopotamus's sweat is pink.",
+    "If you lift a kangaroo’s tail off the ground, it cannot hop.",
+    "Billy goats urinate on their own heads to smell more attractive to females.",
+    "The inventor of the frisbee was cremated and made into a frisbee after he died.",
+    "During your lifetime, you will produce enough saliva to fill two swimming pools.",
+    "Polar bears could eat as many as 86 penguins in a single sitting, if they did not live at opposite ends of the earth.",
+    "In 2015, more people were killed from injuries caused by taking a selfie than by shark attacks.",
+    "You cannot snore and dream at the same time.",
+    "A crocodile cannot stick its tongue out.",
+    "A shrimp's heart is located in its head.",
+    "Pigs are physically incapable of looking straight up into the sky.",
+    "Wearing headphones for just an hour increases the bacteria in your ear by 700 times.",
+    "Cat urine glows brightly under a black light.",
+    "Like fingerprints, everyone's tongue print is completely unique.",
+    "Rubber bands last much longer when kept refrigerated.",
+    "A shark is the only known fish that can blink with both eyes.",
+    "An ostrich's eye is physically larger than its entire brain.",
+    "Tigers have striped skin, not just striped fur.",
+    "A cat has 32 separate muscles in each of its ears.",
+    "A cockroach can live for several weeks without its head before starving to death.",
+    "Cows have best friends and get measurably stressed when separated.",
+    "Sea otters hold hands when they sleep so they do not drift apart in the water.",
+    "The mythical unicorn is the official national animal of Scotland.",
+    "Squirrels plant thousands of new trees each year simply by forgetting where they buried their acorns.",
+    "Some species of turtles can breathe through their butts.",
+    "Sloths can hold their breath underwater for up to 40 minutes, which is longer than dolphins.",
+    "A group of pugs is officially referred to as a grumble.",
+    "Crows can recognize individual human faces and often hold grudges.",
+    "The total weight of all the ants on Earth is roughly equal to the total weight of all the humans.",
+    "Apple seeds contain a small amount of cyanide.",
+    "A blue whale's tongue weighs as much as an adult elephant.",
+    "Honey badgers have skin so loose they can twist around inside it to bite an attacker.",
+    "Vending machines are statistically twice as likely to kill you than a shark is.",
+    "The shortest commercial flight in the world lasts just 57 seconds.",
+    "A swarm of 20,000 bees once followed a car for two days because their queen was trapped inside.",
+    "There is a town in Norway called Hell, and it freezes over every winter.",
+    "Male puppies will intentionally let female puppies win at play-fighting to keep them engaged.",
+    "The fingerprints of a koala are so indistinguishable from humans that they have confused crime scene investigators.",
+    "A snail can sleep for up to three years at a time if the weather is not optimal.",
+    "The Twitter bird actually has an official name: Larry.",
+    "Humans are the only animals that blush.",
+    "The average person walks the equivalent of five times around the world in a lifetime.",
+    "Bats always turn left when exiting a cave.",
+    "Giraffes have no vocal cords and communicate entirely through body language and low-frequency infrasound.",
+    "Dolphins give each other distinct names and call out to one another using specific whistles.",
+    "Woodpeckers have tongues that wrap around their skulls to protect their brains from the impact of pecking.",
 ]
 
 LOVE_PHRASES = [
@@ -366,6 +443,23 @@ RAGE_CATCH_PHRASES = [
     "Got your mouse!",
     "Outta here!",
     "Take that!",
+]
+
+RAGE_AIM_PHRASES = [
+    "Hold still!",
+    "Don't move!",
+    "Steady...",
+    "Cornered!",
+    "Almost...",
+    "Got you now!",
+]
+
+RAGE_LOCK_PHRASES = [
+    "Locked!",
+    "Pinned!",
+    "Frozen!",
+    "Stay put!",
+    "No escape!",
 ]
 
 RAGE_PHRASES = [

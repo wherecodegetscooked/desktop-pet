@@ -66,20 +66,30 @@ from config import (
     NORMAL_JUMP_POWER_MIN,
     NOTE_INTERVAL_MAX,
     NOTE_INTERVAL_MIN,
+    PERSONALITIES,
+    PERSONALITY_TRAITS,
     PET_STROKE_CALM,
     PET_STROKE_LOVE,
     PHRASES,
     PLATFORM_DROP_CHANCE,
     PLATFORM_EDGE_MARGIN,
+    RAGE_AIM_PHRASES,
+    RAGE_CAPTURE_RADIUS,
     RAGE_CATCH_PHRASES,
+    RAGE_CHARGE_FRAMES,
     RAGE_CHASE_SPEED,
     RAGE_DURATION,
+    RAGE_LOCK_FRAMES,
+    RAGE_LOCK_PHRASES,
     RAGE_PHRASES,
     RAGE_THRESHOLD,
     RANDOM_JUMP_STATE_CHANCE,
     RIGHT_DAMPING,
     RIGHT_SETTLE,
     RIGHT_STIFFNESS,
+    SOCIAL_CHANCE,
+    SOCIAL_GREET_LOVE,
+    SOCIAL_REACH,
     SPEAK_CHANCE,
     SPEAK_COOLDOWN_MAX,
     SPEAK_COOLDOWN_MIN,
@@ -152,9 +162,14 @@ class Pet:
         self.rage = False
         self.rage_timer = 0
         self.weapon = None
-        # When he catches the cursor he flings it: this holds the (x, y) the main
-        # loop should warp the pointer to, then clears it. None when idle.
+        # Cursor capture. He locks on for a beat, then shoots the pointer away
+        # (cursor_grab: one-shot warp target) or pins it (cursor_lock: the main
+        # loop warps to this every frame until released). Both None when idle.
         self.cursor_grab = None
+        self.cursor_lock = None
+        self.capturing = False
+        self.capture_timer = 0
+        self.lock_timer = 0
         # Affection: slow strokes make him fall in love.
         self.love = 0.0
         self.loved = False
@@ -195,6 +210,14 @@ class Pet:
         self.palette_index = 0
         self.palette = PALETTES[0]
         self.name = random.choice(PET_NAMES)
+        # Temperament: scales idle/speed/jump/social/anger/play. Bred children
+        # inherit a blend (see inherit_personality).
+        self.personality = dict(random.choice(PERSONALITIES))
+        # Social wandering toward other pets.
+        self.socializing = False
+        self.social_timer = 0
+        self.social_target_x = 0.0
+        self._peers = []
         # Extra moods.
         self.hunger = 0.0
         self.hungry = False
@@ -502,7 +525,7 @@ class Pet:
                 self.spawn_particles("anger", random.randint(2, 3))
             else:
                 self.spawn_particles("heart", random.randint(1, 2))
-        self.anger += clicks
+        self.anger += clicks * self._trait("anger")
         self.love = max(0.0, self.love - clicks)
         if self.loved and self.love < 1.0:
             self.loved = False
@@ -729,15 +752,56 @@ class Pet:
         platforms — he never flies straight at it."""
         if mouse is None:
             return
-        # Pounce the moment the cursor is within his body — even mid-jump.
         center_x = self.x + WINDOW_W / 2
         center_y = self.y + WINDOW_H / 2
-        if (
-            abs(mouse[0] - center_x) < WINDOW_W * 0.7
-            and abs(mouse[1] - center_y) < WINDOW_H * 0.8
-        ):
-            self._attack_cursor()
+
+        # Pinned: hold the cursor in place for a beat, then release and calm.
+        if self.lock_timer > 0:
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.facing_right = mouse[0] >= center_x
+            self.lock_timer -= 1
+            if self.lock_timer % 6 == 0:
+                self.spawn_particles("anger", 1)
+            if self.lock_timer <= 0:
+                self._release_cursor()
             return
+
+        dist = math.hypot(mouse[0] - center_x, mouse[1] - center_y)
+
+        # Locking on: plant and aim. Breaks if the cursor leaves the radius
+        # before the charge completes (you get ~1.5s to move it away).
+        if self.capturing:
+            if dist > RAGE_CAPTURE_RADIUS:
+                self.capturing = False
+                self.capture_timer = 0
+            else:
+                self.vx = 0.0
+                self.state = State.IDLE
+                self.facing_right = mouse[0] >= center_x
+                self.capture_timer -= 1
+                if self.capture_timer % 8 == 0:
+                    self.spawn_particles("anger", 1)
+                if self.capture_timer <= 0:
+                    self._fire_at_cursor(mouse)
+                return
+
+        # Start locking on once the cursor is in reach and he's on his feet.
+        if (
+            dist <= RAGE_CAPTURE_RADIUS
+            and not self.airborne
+            and self.state != State.JUMP
+        ):
+            self.capturing = True
+            self.capture_timer = RAGE_CHARGE_FRAMES
+            if not self.weapon:
+                self.weapon = random.choice(WEAPONS)
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.facing_right = mouse[0] >= center_x
+            self.start_talk(random.choice(RAGE_AIM_PHRASES))
+            return
+
         if self.airborne or self.state == State.JUMP:
             return  # let the current jump arc finish
 
@@ -773,26 +837,45 @@ class Pet:
         if mouse[1] < feet_y - 40:
             self._rage_jump(mouse, platforms)
 
-    def _attack_cursor(self):
-        """Pounce: a burst of effects, fling the cursor to a random far spot,
-        gloat, and calm down — revenge served. The main loop reads cursor_grab
-        and performs the actual warp."""
-        self.spawn_particles("anger", 4)
+    def _fire_at_cursor(self, mouse):
+        """Charge complete: a pistol shoots the cursor across the screen; a
+        blade pins it in place for a moment instead."""
+        self.capturing = False
+        self.capture_timer = 0
+        self.spawn_particles("anger", 3)
+        if self.weapon == "pistol":
+            self.spawn_particles("star", 4)
+            # Shoot it somewhere across the desktop, up in the top portion so it
+            # reads as "flung away" rather than landing back on him.
+            span_y = self.max_y - self.min_y
+            self.cursor_grab = (
+                random.uniform(self.min_x + 40, self.max_x - 40),
+                random.uniform(self.min_y + 40, self.min_y + span_y * 0.4),
+            )
+            self.start_talk(random.choice(RAGE_CATCH_PHRASES))
+            self._calm_after_capture()
+        else:
+            self.cursor_lock = (mouse[0], mouse[1])
+            self.lock_timer = RAGE_LOCK_FRAMES
+            self.start_talk(random.choice(RAGE_LOCK_PHRASES))
+
+    def _release_cursor(self):
+        """End a pin: let the pointer go, gloat, and calm down."""
+        self.cursor_lock = None
         self.spawn_particles("star", 3)
-        # Fling the pointer somewhere across the desktop, up in the top portion
-        # so it reads as "thrown away" rather than landing back on him.
-        span_y = self.max_y - self.min_y
-        self.cursor_grab = (
-            random.uniform(self.min_x + 40, self.max_x - 40),
-            random.uniform(self.min_y + 40, self.min_y + span_y * 0.4),
-        )
         self.start_talk(random.choice(RAGE_CATCH_PHRASES))
+        self._calm_after_capture()
+
+    def _calm_after_capture(self):
+        """Revenge served — drop the weapon and cool off."""
         self.rage = False
         self.rage_timer = 0
         self.weapon = None
         self.angry = False
         self.angry_timer = 0
         self.anger = 0.0
+        self.capturing = False
+        self.capture_timer = 0
 
     def _rage_jump(self, mouse, platforms):
         """Jump onto whichever reachable window edge gets him closest to the
@@ -828,7 +911,7 @@ class Pet:
             return
         if abs(mouse[0] - self._feet_x()) < FOLLOW_STOP_DISTANCE * 2:
             return
-        if random.random() > FOLLOW_CHANCE:
+        if random.random() > FOLLOW_CHANCE * self._trait("social"):
             return
         self.following = True
         self.follow_timer = random.randint(120, 300)
@@ -854,6 +937,83 @@ class Pet:
         self.state = State.RUN if speed > 1.6 else State.WALK
         self.state_timer = 30
 
+    # -- Personality & social ---------------------------------------------
+
+    def _trait(self, key):
+        return self.personality.get(key, 1.0)
+
+    def inherit_personality(self, a, b):
+        """Blend two parents' temperaments (with a little mutation) for a bred
+        child, taking a name from one of them."""
+        self.personality = {
+            trait: round(
+                (a.get(trait, 1.0) + b.get(trait, 1.0)) / 2 * random.uniform(0.85, 1.15),
+                2,
+            )
+            for trait in PERSONALITY_TRAITS
+        }
+        self.personality["name"] = random.choice(
+            [a.get("name", "Calm"), b.get("name", "Calm")]
+        )
+
+    def observe_peers(self, peers):
+        """Record the other pets' centres (x, y) for this frame's social check."""
+        self._peers = peers
+
+    def _maybe_socialize(self):
+        """Occasionally wander to the nearest other pet to say hi. Skipped when
+        busy or out of sorts; sociable temperaments do it far more often."""
+        if self.socializing or not self._peers:
+            return False
+        if self.state not in (State.IDLE, State.WALK):
+            return False
+        if (
+            self.angry or self.rage or self.scared or self.asleep
+            or self.focusing or self.hungry or self.following
+        ):
+            return False
+        if random.random() > SOCIAL_CHANCE * self._trait("social"):
+            return False
+        self.social_target_x = min(
+            self._peers, key=lambda c: abs(c[0] - self._feet_x())
+        )[0]
+        self.socializing = True
+        self.social_timer = random.randint(180, 420)
+        return True
+
+    def _update_social(self):
+        """Walk toward the nearest peer; greet on arrival, then drift off."""
+        self.social_timer -= 1
+        if self._peers:
+            self.social_target_x = min(
+                self._peers, key=lambda c: abs(c[0] - self._feet_x())
+            )[0]
+        dx = self.social_target_x - self._feet_x()
+        if abs(dx) < SOCIAL_REACH or self.social_timer <= 0:
+            reached = abs(dx) < SOCIAL_REACH
+            self.socializing = False
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.state_timer = random.randint(40, 90)
+            if reached:
+                self._greet()
+            return
+        direction = 1 if dx > 0 else -1
+        self.vx = direction * 1.6 * self._trait("speed")
+        self.facing_right = direction > 0
+        self.state = State.WALK
+        self.state_timer = 20
+
+    def _greet(self):
+        """Trade a little affection with a nearby pet; playful ones hop."""
+        self.spawn_particles("heart", random.randint(1, 3))
+        self.love = min(LOVE_MAX, self.love + SOCIAL_GREET_LOVE)
+        if self.love >= LOVE_THRESHOLD:
+            self.loved = True
+            self.loved_timer = LOVE_DURATION
+        if self._trait("play") > 1.3 and self.jump_cooldown == 0 and not self.airborne:
+            self.start_jump()
+
     def pick_state(self):
         if self.focusing and not self.rage:
             # Heads-down: mostly sit and work, with the occasional short shuffle.
@@ -868,30 +1028,47 @@ class Pet:
                 self.vy = random.uniform(-0.1, 0.1)
                 self.state_timer = random.randint(60, 140)
             return
-        r = random.random()
-        if r < 0.50:
+        # Temperament shifts the odds: lazy pets idle more, hyper ones run and
+        # jump more, etc. Speed scales how fast he moves.
+        idle_w = self._trait("idle")
+        jump_w = self._trait("jump")
+        speed_mult = self._trait("speed")
+        weights = (
+            ("walk", 0.50),
+            ("idle", 0.32 * idle_w),
+            ("run", 0.16 / idle_w),
+            ("jump", (RANDOM_JUMP_STATE_CHANCE + 0.05) * jump_w),
+        )
+        roll = random.random() * sum(w for _, w in weights)
+        acc = 0.0
+        choice = weights[-1][0]
+        for kind, w in weights:
+            acc += w
+            if roll <= acc:
+                choice = kind
+                break
+
+        if choice == "walk":
             self.state = State.WALK
-            speed = random.uniform(0.35, 1.05)
             direction = 1 if random.random() > 0.5 else -1
-            self.vx = direction * speed
+            self.vx = direction * random.uniform(0.35, 1.05) * speed_mult
             self.vy = random.uniform(-0.12, 0.12)
             self.state_timer = random.randint(160, 420)
-        elif r < 0.90:
+        elif choice == "idle":
             self.state = State.IDLE
             self.vx = 0.0
             self.vy = 0.0
             self.state_timer = random.randint(120, 360)
-        elif r < 1.0 - RANDOM_JUMP_STATE_CHANCE:
+        elif choice == "run":
             self.state = State.RUN
-            speed = random.uniform(1.8, 3.0)
             direction = 1 if random.random() > 0.5 else -1
-            self.vx = direction * speed
+            self.vx = direction * random.uniform(1.8, 3.0) * speed_mult
             self.vy = random.uniform(-0.18, 0.18)
             self.state_timer = random.randint(30, 75)
-        else:
+        else:  # jump
             if self.jump_cooldown > 0:
                 self.state = State.WALK
-                self.vx = random.choice([-1, 1]) * random.uniform(0.35, 1.05)
+                self.vx = random.choice([-1, 1]) * random.uniform(0.35, 1.05) * speed_mult
                 self.vy = random.uniform(-0.12, 0.12)
                 self.state_timer = random.randint(120, 260)
             else:
@@ -979,12 +1156,20 @@ class Pet:
             elif self.curious and grounded and mouse is not None:
                 self._update_curious(mouse)
             else:
-                if self.following:
+                if self.socializing:
+                    self._update_social()
+                elif self.following:
                     self._update_follow(mouse)
+                elif grounded and self._maybe_socialize():
+                    pass
                 elif mouse is not None and grounded:
                     self._maybe_follow_mouse(mouse)
 
-                if not self.following and grounded:
+                if (
+                    not self.following
+                    and not self.socializing
+                    and grounded
+                ):
                     if not self._maybe_drop_through_platform():
                         self._maybe_jump_to_window(platforms)
 

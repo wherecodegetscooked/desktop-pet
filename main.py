@@ -261,6 +261,7 @@ def main():
         for action in primary.consume_menu_actions():
             if action == "breed" and len(pets) < MAX_PETS:
                 parent = random.choice(pets)["pet"]
+                mate = random.choice(pets)["pet"]
                 offset = random.choice([-1, 1]) * (WINDOW_W + 12)
                 child = spawn_pet(
                     bounds,
@@ -268,6 +269,8 @@ def main():
                     x=parent.x + offset,
                     y=parent.y,
                 )
+                # The child's temperament is a blend of two pets'.
+                child["pet"].inherit_personality(parent.personality, mate.personality)
                 parent.spawn_particles("heart", 4)
                 if focus_active:
                     child["pet"].start_focus()
@@ -367,14 +370,23 @@ def main():
             pet = entry["pet"]
             if entry is drag_target:
                 continue
+            # Other pets' centres, so this one can wander over and socialize.
+            pet.observe_peers([
+                (other["pet"].x + WINDOW_W / 2, other["pet"].y + WINDOW_H / 2)
+                for other in pets
+                if other is not entry
+            ])
             pet.observe_activity(idle_seconds, keys_this_frame)
             if not drag["dragging"]:
                 pet.observe_cursor(mouse)
             pet.update(platforms, mouse, ball)
-            # An enraged pet that caught the cursor flings it across the screen.
+            # An enraged pet that caught the cursor either flings it once
+            # (cursor_grab) or pins it in place each frame (cursor_lock).
             if pet.cursor_grab is not None:
                 primary.warp_cursor(*pet.cursor_grab)
                 pet.cursor_grab = None
+            if pet.cursor_lock is not None:
+                primary.warp_cursor(*pet.cursor_lock)
 
         # Pomodoro countdown: when the focus timer elapses, everyone celebrates.
         if focus_active:
