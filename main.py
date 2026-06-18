@@ -88,7 +88,32 @@ def pet_under_point(pets, point):
     return None
 
 
-def render_pet(entry):
+def _display_for_fx(display_rects, pet, origin_x, origin_y):
+    """Pick the display the effects window must stay inside.
+
+    Prefer the display containing the pet's centre; if the pet sits in the
+    empty gap between differently-sized monitors, fall back to the display the
+    intended effects rect overlaps most, then to the global bounding box.
+    Returned as (x, y, w, h) in the global CG (top-left origin) space.
+    """
+    cx = pet.x + WINDOW_W / 2
+    cy = pet.y + WINDOW_H / 2
+    for d in display_rects:
+        if d["x"] <= cx < d["x"] + d["w"] and d["y"] <= cy < d["y"] + d["h"]:
+            return d["x"], d["y"], d["w"], d["h"]
+    best, best_area = None, 0
+    for d in display_rects:
+        ox = max(0, min(origin_x + FX_W, d["x"] + d["w"]) - max(origin_x, d["x"]))
+        oy = max(0, min(origin_y + FX_H, d["y"] + d["h"]) - max(origin_y, d["y"]))
+        area = ox * oy
+        if area > best_area:
+            best, best_area = d, area
+    if best is not None:
+        return best["x"], best["y"], best["w"], best["h"]
+    return pet.min_x, pet.min_y, pet.max_x - pet.min_x, pet.max_y - pet.min_y
+
+
+def render_pet(entry, display_rects):
     """Draw a pet into its overlay, and its bubble/particles/weapon into fx."""
     pet = entry["pet"]
     overlay = entry["overlay"]
@@ -104,11 +129,19 @@ def render_pet(entry):
     if pet.talking or pet.particles or pet.weapon:
         origin_x = round(pet.x + WINDOW_W / 2 - FX_W / 2)
         origin_y = round(pet.y + WINDOW_H / 2 - FX_H / 2)
-        # Keep the effects window fully on the desktop; otherwise macOS shoves
-        # it back on-screen (notably near the bottom edge), which fights our
-        # per-frame move and makes the bubble flicker.
-        origin_x = max(pet.min_x, min(pet.max_x - FX_W, origin_x))
-        origin_y = max(pet.min_y, min(pet.max_y - FX_H, origin_y))
+        # Keep the effects window fully inside the SINGLE display the pet is on,
+        # not just the global bounding box. That box spans the empty gaps
+        # between differently-sized monitors, so clamping to it let this large
+        # (420x440) window straddle a display edge or poke into an inter-display
+        # gap. A high-level "join all spaces" panel that straddles a boundary
+        # gets composited/constrained onto a second spot by the window server,
+        # which showed up as a flickering ghost of the bubble/particles in a
+        # corner of the external monitor.
+        dx, dy, dw, dh = _display_for_fx(display_rects, pet, origin_x, origin_y)
+        if dw >= FX_W:
+            origin_x = max(dx, min(dx + dw - FX_W, origin_x))
+        if dh >= FX_H:
+            origin_y = max(dy, min(dy + dh - FX_H, origin_y))
         # The pet is centred in the window only when unclamped; derive its
         # actual offset so the bubble/weapon stay pinned to him after clamping.
         pet_left = round(pet.x) - origin_x
@@ -349,7 +382,7 @@ def main():
         pets = survivors
 
         for entry in pets:
-            render_pet(entry)
+            render_pet(entry, display_rects)
 
         if ball is not None:
             ball_overlay.move(round(ball.x - BALL_WIN / 2), round(ball.y - BALL_WIN / 2))
