@@ -71,6 +71,7 @@ from config import (
     PHRASES,
     PLATFORM_DROP_CHANCE,
     PLATFORM_EDGE_MARGIN,
+    RAGE_CATCH_PHRASES,
     RAGE_CHASE_SPEED,
     RAGE_DURATION,
     RAGE_PHRASES,
@@ -151,6 +152,9 @@ class Pet:
         self.rage = False
         self.rage_timer = 0
         self.weapon = None
+        # When he catches the cursor he flings it: this holds the (x, y) the main
+        # loop should warp the pointer to, then clears it. None when idle.
+        self.cursor_grab = None
         # Affection: slow strokes make him fall in love.
         self.love = 0.0
         self.loved = False
@@ -720,13 +724,38 @@ class Pet:
 
     def _update_rage(self, mouse, platforms):
         """Aggressively pursue the cursor on foot: run toward it, jump up onto
-        windows to climb toward it, and walk off ledges to drop down to it.
-        Respects gravity and platforms — he never flies straight at it."""
+        windows to climb toward it, and drop off ledges to descend to it. On
+        contact he pounces and flings the cursor away. Respects gravity and
+        platforms — he never flies straight at it."""
         if mouse is None:
+            return
+        # Pounce the moment the cursor is within his body — even mid-jump.
+        center_x = self.x + WINDOW_W / 2
+        center_y = self.y + WINDOW_H / 2
+        if (
+            abs(mouse[0] - center_x) < WINDOW_W * 0.7
+            and abs(mouse[1] - center_y) < WINDOW_H * 0.8
+        ):
+            self._attack_cursor()
             return
         if self.airborne or self.state == State.JUMP:
             return  # let the current jump arc finish
+
+        feet_y = self.y + WINDOW_H
         dx = mouse[0] - self._feet_x()
+        dy = mouse[1] - feet_y
+
+        # Cursor is well below and he's stranded on a window ledge: drop off it
+        # to chase downward (the old code could only climb, so he got stuck up
+        # high above a low cursor).
+        on_ledge = (
+            self.platform is not None
+            and self.platform["name"] != GROUND_PLATFORM_NAME
+        )
+        if dy > 50 and on_ledge and self.jump_cooldown == 0:
+            self.drop()
+            return
+
         if abs(dx) > 8:
             self.vx = (1 if dx > 0 else -1) * RAGE_CHASE_SPEED
             self.state = State.RUN
@@ -741,8 +770,29 @@ class Pet:
             self.facing_right = False
         self.state_timer = 30
         # Climb toward the cursor when it's above him, hopping window to window.
-        if mouse[1] < self.y + WINDOW_H - 40:
+        if mouse[1] < feet_y - 40:
             self._rage_jump(mouse, platforms)
+
+    def _attack_cursor(self):
+        """Pounce: a burst of effects, fling the cursor to a random far spot,
+        gloat, and calm down — revenge served. The main loop reads cursor_grab
+        and performs the actual warp."""
+        self.spawn_particles("anger", 4)
+        self.spawn_particles("star", 3)
+        # Fling the pointer somewhere across the desktop, up in the top portion
+        # so it reads as "thrown away" rather than landing back on him.
+        span_y = self.max_y - self.min_y
+        self.cursor_grab = (
+            random.uniform(self.min_x + 40, self.max_x - 40),
+            random.uniform(self.min_y + 40, self.min_y + span_y * 0.4),
+        )
+        self.start_talk(random.choice(RAGE_CATCH_PHRASES))
+        self.rage = False
+        self.rage_timer = 0
+        self.weapon = None
+        self.angry = False
+        self.angry_timer = 0
+        self.anger = 0.0
 
     def _rage_jump(self, mouse, platforms):
         """Jump onto whichever reachable window edge gets him closest to the

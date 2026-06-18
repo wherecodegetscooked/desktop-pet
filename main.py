@@ -371,6 +371,10 @@ def main():
             if not drag["dragging"]:
                 pet.observe_cursor(mouse)
             pet.update(platforms, mouse, ball)
+            # An enraged pet that caught the cursor flings it across the screen.
+            if pet.cursor_grab is not None:
+                primary.warp_cursor(*pet.cursor_grab)
+                pet.cursor_grab = None
 
         # Pomodoro countdown: when the focus timer elapses, everyone celebrates.
         if focus_active:

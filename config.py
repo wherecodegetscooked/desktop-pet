@@ -357,6 +357,17 @@ LOVE_PHRASES = [
     "You make me happy.",
 ]
 
+RAGE_CATCH_PHRASES = [
+    "Gotcha!",
+    "Caught you!",
+    "Yeet!",
+    "Begone!",
+    "Mine now!",
+    "Got your mouse!",
+    "Outta here!",
+    "Take that!",
+]
+
 RAGE_PHRASES = [
     "I'll get you!",
     "Come here!",

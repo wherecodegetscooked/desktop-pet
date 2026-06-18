@@ -134,6 +134,9 @@ class MacOverlay:
             ctypes.c_int,
         ]
         cg.CGImageRelease.argtypes = [ctypes.c_void_p]
+        # Cursor warp, for the enraged pet flinging the mouse pointer away.
+        cg.CGWarpMouseCursorPosition.restype = ctypes.c_int
+        cg.CGWarpMouseCursorPosition.argtypes = [NSPoint]
         # Window list, for reading the frontmost window's title (app-awareness).
         cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
         cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
@@ -626,6 +629,12 @@ class MacOverlay:
         NSEvent = self.objc.objc_getClass(b"NSEvent")
         mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)
         return (mouse.x, self.main_height - mouse.y)
+
+    def warp_cursor(self, x, y):
+        """Teleport the mouse pointer to a global-display point (top-left
+        origin, the same space the pet lives in). Used by the enraged pet to
+        fling the cursor away. Needs no accessibility permission."""
+        self.cg.CGWarpMouseCursorPosition(NSPoint(float(x), float(y)))
 
     def frontmost_app(self):
         """(bundle_id, localized_name) of the frontmost application, or two
