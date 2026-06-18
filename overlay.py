@@ -137,6 +137,12 @@ class MacOverlay:
         # Window list, for reading the frontmost window's title (app-awareness).
         cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
         cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        # Screen Recording gate: window titles are only readable with it granted
+        # (10.15+). These may be absent on older macOS, hence the getattr guard.
+        if hasattr(cg, "CGPreflightScreenCaptureAccess"):
+            cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
+        if hasattr(cg, "CGRequestScreenCaptureAccess"):
+            cg.CGRequestScreenCaptureAccess.restype = ctypes.c_bool
         # Input-activity queries for AFK sleep and typing energy.
         cg.CGEventSourceSecondsSinceLastEventType.restype = ctypes.c_double
         cg.CGEventSourceSecondsSinceLastEventType.argtypes = [
@@ -633,6 +639,24 @@ class MacOverlay:
         bundle = _nsstring_text(objc, _msg(objc, app, "bundleIdentifier"))
         name = _nsstring_text(objc, _msg(objc, app, "localizedName"))
         return bundle, name
+
+    def ensure_screen_recording(self):
+        """Make sure we can read window titles, which is what lets us spot a
+        YouTube tab in any browser — including Firefox-based ones (Zen, etc.)
+        that expose no scriptable tab/URL API.
+
+        Titles are gated behind Screen Recording permission on macOS 10.15+.
+        Preflight, and prompt once if undecided. Returns True if already granted;
+        a fresh grant only takes effect after the app is restarted.
+        """
+        preflight = getattr(self.cg, "CGPreflightScreenCaptureAccess", None)
+        request = getattr(self.cg, "CGRequestScreenCaptureAccess", None)
+        if preflight is None or request is None:
+            return True  # pre-10.15: titles are readable without permission
+        if preflight():
+            return True
+        request()  # shows the system prompt only the first time it's undecided
+        return False
 
     def active_window_title(self):
         """Title of the frontmost normal (layer-0) on-screen window, or "".
