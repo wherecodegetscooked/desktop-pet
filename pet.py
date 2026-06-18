@@ -606,7 +606,12 @@ class Pet:
         self.love = max(0.0, self.love - LOVE_DECAY)
         if self.rage:
             self.rage_timer -= 1
-            if self.rage_timer <= 0 and self.anger < 1.0:
+            if (
+                self.rage_timer <= 0
+                and self.anger < 1.0
+                and not self.capturing
+                and self.lock_timer <= 0
+            ):
                 self.rage = False
                 self.weapon = None
         if self.angry:
@@ -754,18 +759,6 @@ class Pet:
             return
         center_x = self.x + WINDOW_W / 2
         center_y = self.y + WINDOW_H / 2
-
-        # Pinned: hold the cursor in place for a beat, then release and calm.
-        if self.lock_timer > 0:
-            self.vx = 0.0
-            self.state = State.IDLE
-            self.facing_right = mouse[0] >= center_x
-            self.lock_timer -= 1
-            if self.lock_timer % 6 == 0:
-                self.spawn_particles("anger", 1)
-            if self.lock_timer <= 0:
-                self._release_cursor()
-            return
 
         dist = math.hypot(mouse[0] - center_x, mouse[1] - center_y)
 
@@ -1110,6 +1103,18 @@ class Pet:
         self._update_face()
         self._update_particles()
         self._update_mood()
+
+        # A pinned cursor counts down and releases on its own, independent of
+        # mood — so it can never get stuck held (e.g. if rage lapses mid-pin).
+        if self.lock_timer > 0:
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.lock_timer -= 1
+            if self.lock_timer % 6 == 0:
+                self.spawn_particles("anger", 1)
+            if self.lock_timer <= 0:
+                self._release_cursor()
+            return
 
         if self.tumbling:
             self._update_tumble(platforms)
