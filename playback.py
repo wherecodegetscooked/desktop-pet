@@ -54,11 +54,15 @@ class _PropertyAddress(ctypes.Structure):
 class PlaybackMonitor:
     """Polls media playback on a daemon thread; expose the latest as booleans."""
 
-    def __init__(self, interval=1.0):
+    def __init__(self, interval=1.0, audio_grace=2.5):
         self._interval = interval
+        # CoreAudio's "device running" flag can briefly drop mid-playback, so we
+        # hold audio "active" for a grace window after the last positive reading
+        # to keep the popcorn from flickering off while a video keeps playing.
+        self._audio_grace = audio_grace
         self._lock = threading.Lock()
         self._music_playing = False
-        self._audio_active = False
+        self._audio_last_true = float("-inf")
         self._ca = self._load_core_audio()
         self._running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -88,7 +92,7 @@ class PlaybackMonitor:
     @property
     def audio_active(self):
         with self._lock:
-            return self._audio_active
+            return (time.monotonic() - self._audio_last_true) < self._audio_grace
 
     def stop(self):
         self._running = False
@@ -99,9 +103,11 @@ class PlaybackMonitor:
         while self._running:
             music = self._read_music_playing()
             audio = self._read_audio_active()
+            now = time.monotonic()
             with self._lock:
                 self._music_playing = music
-                self._audio_active = audio
+                if audio:
+                    self._audio_last_true = now
             time.sleep(self._interval)
 
     def _read_music_playing(self):

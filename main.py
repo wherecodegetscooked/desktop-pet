@@ -331,7 +331,7 @@ def main():
         if now - last_activity_scan > 0.5:
             bundle, app_name = primary.frontmost_app()
             title = (
-                primary.active_window_title()
+                primary.active_window_title(app_name)
                 if activity.needs_title(bundle, app_name)
                 else ""
             )

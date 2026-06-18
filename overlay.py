@@ -66,7 +66,7 @@ class MacOverlay:
         # NSString keys for reading the frontmost window's title (app-awareness).
         self._win_keys = {
             name: _nsstring(self.objc, name)
-            for name in ("kCGWindowLayer", "kCGWindowName")
+            for name in ("kCGWindowLayer", "kCGWindowName", "kCGWindowOwnerName")
         }
         self.colorspace = self.cg.CGColorSpaceCreateDeviceRGB()
         self.nsapp = None
@@ -658,12 +658,14 @@ class MacOverlay:
         request()  # shows the system prompt only the first time it's undecided
         return False
 
-    def active_window_title(self):
+    def active_window_title(self, owner_name=""):
         """Title of the frontmost normal (layer-0) on-screen window, or "".
 
-        Reading window titles needs Screen Recording permission on macOS 10.15+;
-        without it the title comes back empty and the caller falls back to plain
-        app detection.
+        When `owner_name` is given (the frontmost app's name), prefer that app's
+        window — so we read the focused browser's tab title rather than whatever
+        window happens to sort on top — and fall back to the topmost window's
+        title if none matches. Reading titles needs Screen Recording permission
+        on macOS 10.15+; without it they come back empty.
         """
         options = WINDOW_LIST_ON_SCREEN_ONLY | WINDOW_LIST_EXCLUDE_DESKTOP
         array = self.cg.CGWindowListCopyWindowInfo(options, 0)
@@ -671,6 +673,7 @@ class MacOverlay:
             return ""
         try:
             count = _msg(self.objc, array, "count", restype=ctypes.c_ulong)
+            fallback = ""
             for i in range(count):
                 info = _msg(
                     self.objc, array, "objectAtIndex:", i, argtypes=[ctypes.c_ulong]
@@ -681,13 +684,23 @@ class MacOverlay:
                 )
                 if layer != 0:
                     continue  # skip menubar, our own high-level panels, etc.
-                return _nsstring_text(
+                title = _nsstring_text(
                     self.objc,
                     _msg(self.objc, info, "objectForKey:", self._win_keys["kCGWindowName"]),
                 )
+                if not owner_name:
+                    return title
+                owner = _nsstring_text(
+                    self.objc,
+                    _msg(self.objc, info, "objectForKey:", self._win_keys["kCGWindowOwnerName"]),
+                )
+                if owner == owner_name and title:
+                    return title
+                if not fallback:
+                    fallback = title
+            return fallback
         finally:
             self.cf.CFRelease(array)
-        return ""
 
     def _drag_top_left(self, NSEvent):
         mouse = _msg(self.objc, NSEvent, "mouseLocation", restype=NSPoint)
