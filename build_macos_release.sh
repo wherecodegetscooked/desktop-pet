@@ -33,6 +33,7 @@ pyinstaller_args=(
   --windowed
   --name "$APP_NAME"
   --osx-bundle-identifier "$BUNDLE_ID"
+  --icon "$PROJECT_DIR/icon.icns"
   --add-data "$PROJECT_DIR/sprite.png:."
   --add-data "$PROJECT_DIR/VERSION:."
 )

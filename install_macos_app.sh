@@ -23,6 +23,9 @@ fi
 
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$HOME/Applications" "$HOME/Library/LaunchAgents" "$LOG_DIR"
 
+# App icon (falls back silently to the default if icon.icns is missing).
+cp -f "$PROJECT_DIR/icon.icns" "$RESOURCES_DIR/icon.icns" 2>/dev/null || true
+
 cat > "$EXECUTABLE" <<EOF
 #!/bin/zsh
 cd "$PROJECT_DIR"
@@ -44,6 +47,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
   <string>$BUNDLE_ID</string>
   <key>CFBundleExecutable</key>
   <string>DesktopPet</string>
+  <key>CFBundleIconFile</key>
+  <string>icon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleVersion</key>
