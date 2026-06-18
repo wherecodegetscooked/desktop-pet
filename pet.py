@@ -19,9 +19,6 @@ from config import (
     CURIOUS_SPEED,
     FETCH_REACH_HEIGHT,
     FETCH_SPEED,
-    HUNGER_THRESHOLD,
-    HUNGRY_PHRASES,
-    HUNGRY_SECONDS,
     PALETTES,
     PET_NAMES,
     PLAY_PHRASES,
@@ -219,8 +216,6 @@ class Pet:
         self.social_target_x = 0.0
         self._peers = []
         # Extra moods.
-        self.hunger = 0.0
-        self.hungry = False
         self.curious = False
         self.curious_timer = 0
         self.scared = False
@@ -241,8 +236,6 @@ class Pet:
             return "love"
         if self.excited:
             return "excited"
-        if self.hungry:
-            return "hungry"
         if self.curious:
             return "curious"
         if self.bored:
@@ -260,8 +253,6 @@ class Pet:
             return LOVE_PHRASES
         if self.excited:
             return EXCITED_PHRASES
-        if self.hungry:
-            return HUNGRY_PHRASES
         if self.curious:
             return CURIOUS_PHRASES
         if self.bored:
@@ -623,10 +614,6 @@ class Pet:
             if self.loved_timer <= 0 and self.love < 1.0:
                 self.loved = False
 
-        # Hunger slowly creeps up until he's fed.
-        self.hunger = min(1.0, self.hunger + 1.0 / (HUNGRY_SECONDS * FPS))
-        self.hungry = self.hunger >= HUNGER_THRESHOLD
-
         if self.scared:
             self.scared_timer -= 1
             if self.scared_timer <= 0:
@@ -646,7 +633,6 @@ class Pet:
             and not self.angry
             and not self.excited
             and not self.bored
-            and not self.hungry
             and not self.loved
             and not self.focusing
             and not self.airborne
@@ -666,13 +652,6 @@ class Pet:
         self.loved = False
         self.spawn_particles("sweat", random.randint(2, 3))
         self.start_talk(random.choice(SCARED_PHRASES))
-
-    def feed(self):
-        """Fill his belly and make him happy (menu 'Feed')."""
-        self.hunger = 0.0
-        self.hungry = False
-        self.spawn_particles("heart", 4)
-        self.start_talk("Yum!")
 
     def cycle_palette(self):
         """Recolour to the next palette (menu 'Recolour')."""
@@ -962,7 +941,7 @@ class Pet:
             return False
         if (
             self.angry or self.rage or self.scared or self.asleep
-            or self.focusing or self.hungry or self.following
+            or self.focusing or self.following
         ):
             return False
         if random.random() > SOCIAL_CHANCE * self._trait("social"):

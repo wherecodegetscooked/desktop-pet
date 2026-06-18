@@ -506,11 +506,6 @@ def draw_pet_frame(pet):
         for sx in (7, 11):
             rect(small, sx, eye_y - 1, 2, 3, EYE_COLOR)
             px(small, sx, eye_y - 1, EYE_WHITE)
-    elif pet.hungry and not pet.angry:
-        # Big pleading eyes (the open, drooly mouth carries the hunger).
-        for sx in (7, 11):
-            rect(small, sx, eye_y, 2, 2, EYE_COLOR)
-            px(small, sx, eye_y, EYE_WHITE)
     elif pet.curious and not pet.angry:
         # Alert, attentive eyes; glint on the inner side (the '?' tells the rest).
         for sx in (7, 11):
@@ -562,12 +557,6 @@ def draw_pet_frame(pet):
         px(small, 10, mouth_y + 1, EYE_COLOR)
         px(small, 11, mouth_y, EYE_COLOR)
         px(small, 12, mouth_y + 1, EYE_COLOR)
-    elif pet.hungry:
-        # Open, drooly mouth with a little tongue.
-        px(small, 9, mouth_y, EYE_COLOR)
-        px(small, 10, mouth_y, EYE_COLOR)
-        px(small, 11, mouth_y, EYE_COLOR)
-        px(small, 10, mouth_y + 1, BLUSH_COLOR)
     elif pet.curious:
         # Small, intrigued "o".
         px(small, 10, mouth_y, EYE_COLOR)

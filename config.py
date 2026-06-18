@@ -92,7 +92,6 @@ ZZZ_COLOR = (150, 170, 210, 255)
 DUST_COLOR = (205, 198, 186, 255)
 SWEAT_COLOR = (120, 195, 235, 255)
 QUESTION_COLOR = (255, 236, 150, 255)
-FOOD_COLOR = (235, 150, 90, 255)
 NOTE_COLOR = (176, 150, 240, 255)
 
 # App-aware activity props --------------------------------------------------
@@ -230,12 +229,6 @@ PET_NAMES = [
     "Pixel", "Mochi", "Biscuit", "Waffle", "Pebble", "Tofu", "Noodle", "Gizmo",
     "Sprout", "Mango", "Cosmo", "Bean", "Pip", "Hazel", "Yuki", "Pretzel",
 ]
-
-# Hunger (a slow care stat) -------------------------------------------------
-# He gets peckish over time and asks for food; "Feed" from the menu fills him up.
-HUNGRY_SECONDS = 1000                # Seconds from fully fed to fully starving.
-HUNGER_THRESHOLD = 0.6               # Fraction of the way to starving before he's hungry
-                                     # (0.6 * 1000s => hungry after ~10 minutes).
 
 # Curiosity -----------------------------------------------------------------
 # Now and then something catches his eye and he trots over to investigate.
@@ -474,19 +467,6 @@ FOCUS_PHRASES = [
     "We got this.",
     "Eyes on it.",
     "Almost there!",
-]
-
-HUNGRY_PHRASES = [
-    "I'm hungry...",
-    "Feed me?",
-    "Snack time?",
-    "Tummy rumbles.",
-    "Got any treats?",
-    "So peckish.",
-    "Food, please!",
-    "Munch munch?",
-    "My belly...",
-    "Nom nom soon?",
 ]
 
 CURIOUS_PHRASES = [

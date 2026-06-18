@@ -302,9 +302,6 @@ def main():
             elif action == "ball_remove" and ball is not None:
                 ball_overlay.close()
                 ball = None
-            elif action == "feed":
-                for entry in pets:
-                    entry["pet"].feed()
             elif action == "recolour":
                 pets[0]["pet"].cycle_palette()
             elif action == "rename":
