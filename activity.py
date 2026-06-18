@@ -1,20 +1,21 @@
 """Classify what the human is doing into a pet reaction.
 
 Pure policy with no platform code: given the frontmost app (bundle id / name),
-the frontmost window title, and the set of running app bundle ids, decide which
-prop the pet should show. The detection plumbing lives in `overlay.py`; this
+the frontmost window title, and whether sound is currently playing, decide
+which prop the pet should show. The detection plumbing lives in `overlay.py`
+(foreground app/title) and `playback.py` (audio + music play state); this
 module holds only the lookup tables, so adding a new app is a one-line edit.
 
 Reactions:
   "work"   -> works on a laptop and types (focus session, editors, IDEs,
               terminals, office / notes apps)
-  "video"  -> munches popcorn (video players, or a browser tab whose title
-              looks like a video site)
+  "video"  -> munches popcorn (a video player or a YouTube-style browser tab —
+              only while audio is actually playing)
   "gaming" -> sparkles with excitement (games / Steam)
   None     -> no special prop
 
-Music (Spotify / Music running) is independent: it layers headphones + floating
-notes on top of whatever else is going on.
+Music headphones are handled separately (see playback.py): they show only while
+Spotify / Apple Music is actually playing, layered on top of any prop above.
 """
 
 BROWSER_BUNDLES = {
@@ -27,6 +28,7 @@ BROWSER_BUNDLES = {
     "company.thebrowser.Browser",  # Arc
     "com.operasoftware.Opera",
     "com.vivaldi.Vivaldi",
+    "app.zen-browser.zen",
 }
 
 VIDEO_BUNDLES = {
@@ -36,12 +38,6 @@ VIDEO_BUNDLES = {
     "com.apple.TV",
     "com.netflix.Netflix",
     "com.plexapp.plex",
-}
-
-MUSIC_BUNDLES = {
-    "com.spotify.client",
-    "com.apple.Music",
-    "com.apple.iTunes",
 }
 
 WORK_BUNDLES = {
@@ -87,7 +83,7 @@ WORK_NAME_HINTS = (
 VIDEO_NAME_HINTS = ("quicktime", "vlc", "iina", "netflix", "plex", "infuse")
 GAME_NAME_HINTS = ("steam", "epic games", "minecraft")
 BROWSER_NAME_HINTS = (
-    "safari", "chrome", "firefox", "edge", "brave", "arc", "opera", "vivaldi",
+    "safari", "chrome", "firefox", "edge", "brave", "arc", "opera", "vivaldi", "zen"
 )
 
 # Matched against the lowercased browser window title to spot a video tab.
@@ -114,24 +110,23 @@ def _matches(bundle, app_name, bundles, name_hints):
     return any(hint in name for hint in name_hints)
 
 
-def classify(bundle, app_name, window_title, running_bundles, focus_active):
-    """Return (context, music) for the current foreground activity.
+def classify(bundle, app_name, window_title, focus_active, audio_playing):
+    """Return the foreground prop context: "work" | "video" | "gaming" | None.
 
-    `context` is "work" | "video" | "gaming" | None; `music` is True while a
-    known music app is running. A focus session always means "work".
+    A focus session always means "work". Video (a video app or a YouTube-style
+    browser tab) only counts while `audio_playing` is True, so a paused video
+    doesn't get popcorn. Music headphones are decided separately by the caller.
     """
-    music = bool(set(running_bundles) & MUSIC_BUNDLES)
-
     if focus_active:
-        return "work", music
+        return "work"
     if _matches(bundle, app_name, VIDEO_BUNDLES, VIDEO_NAME_HINTS):
-        return "video", music
+        return "video" if audio_playing else None
     if _matches(bundle, app_name, GAME_BUNDLES, GAME_NAME_HINTS):
-        return "gaming", music
+        return "gaming"
     if _matches(bundle, app_name, WORK_BUNDLES, WORK_NAME_HINTS):
-        return "work", music
-    if needs_title(bundle, app_name):
+        return "work"
+    if needs_title(bundle, app_name) and audio_playing:
         title = (window_title or "").lower()
         if any(keyword in title for keyword in VIDEO_TITLE_KEYWORDS):
-            return "video", music
-    return None, music
+            return "video"
+    return None

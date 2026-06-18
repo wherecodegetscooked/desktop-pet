@@ -35,6 +35,7 @@ from config import (
     WINDOW_LIST_EXCLUDE_DESKTOP,
     WINDOW_LIST_ON_SCREEN_ONLY,
 )
+from updater import current_version
 from objc_bridge import (
     CGRect,
     NSPoint,
@@ -313,6 +314,21 @@ class MacOverlay:
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         # Quit hides this primary window; the run loop notices and shuts down.
         self._add_menu_item(menu, "Quit Desktop Pet", "q", self.window, b"orderOut:")
+
+        # A disabled label at the very bottom showing this build's version.
+        _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
+        version_item = _msg(objc, NSMenuItem, "alloc")
+        version_item = _msg(
+            objc,
+            version_item,
+            "initWithTitle:action:keyEquivalent:",
+            _nsstring(objc, f"v{current_version()}"),
+            None,
+            _nsstring(objc, ""),
+            argtypes=[ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p],
+        )
+        _msg(objc, version_item, "setEnabled:", False, argtypes=[ctypes.c_bool])
+        _msg(objc, menu, "addItem:", version_item, argtypes=[ctypes.c_void_p])
 
         _msg(objc, self.status_item, "setMenu:", menu, argtypes=[ctypes.c_void_p])
 
@@ -617,24 +633,6 @@ class MacOverlay:
         bundle = _nsstring_text(objc, _msg(objc, app, "bundleIdentifier"))
         name = _nsstring_text(objc, _msg(objc, app, "localizedName"))
         return bundle, name
-
-    def running_bundle_ids(self):
-        """Set of bundle ids of currently running apps (background ones too),
-        used to spot music players. Needs no special permission."""
-        objc = self.objc
-        NSWorkspace = objc.objc_getClass(b"NSWorkspace")
-        ws = _msg(objc, NSWorkspace, "sharedWorkspace")
-        apps = _msg(objc, ws, "runningApplications")
-        ids = set()
-        if not apps:
-            return ids
-        count = _msg(objc, apps, "count", restype=ctypes.c_ulong)
-        for i in range(count):
-            app = _msg(objc, apps, "objectAtIndex:", i, argtypes=[ctypes.c_ulong])
-            bundle = _nsstring_text(objc, _msg(objc, app, "bundleIdentifier"))
-            if bundle:
-                ids.add(bundle)
-        return ids
 
     def active_window_title(self):
         """Title of the frontmost normal (layer-0) on-screen window, or "".

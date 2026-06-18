@@ -19,6 +19,7 @@ import time
 import pygame
 
 import activity
+import playback
 import updater
 
 from ball import Ball
@@ -217,6 +218,10 @@ def main():
     # The first pet reuses the menu-owning primary overlay created above.
     pets = [spawn_pet(bounds, platforms, overlay=primary)]
 
+    # Polls media playback off-thread (music play state + whether sound is
+    # actually playing) so the 60 fps loop never blocks on osascript.
+    playback_monitor = playback.PlaybackMonitor()
+
     clock = pygame.time.Clock()
     last_reassert = 0.0
     last_window_scan = 0.0
@@ -327,10 +332,10 @@ def main():
                 if activity.needs_title(bundle, app_name)
                 else ""
             )
-            running = primary.running_bundle_ids()
-            context, music = activity.classify(
-                bundle, app_name, title, running, focus_active
+            context = activity.classify(
+                bundle, app_name, title, focus_active, playback_monitor.audio_active
             )
+            music = playback_monitor.music_playing
             for entry in pets:
                 entry["pet"].set_activity(context, music)
             last_activity_scan = now
@@ -397,6 +402,7 @@ def main():
 
         clock.tick(FPS)
 
+    playback_monitor.stop()
     pygame.quit()
 
 
