@@ -193,12 +193,13 @@ PET_NAMES = [
 
 # Hunger (a slow care stat) -------------------------------------------------
 # He gets peckish over time and asks for food; "Feed" from the menu fills him up.
-HUNGRY_SECONDS = 150                 # Seconds from fully fed to fully starving.
-HUNGER_THRESHOLD = 0.6               # Fraction of the way to starving before he's hungry.
+HUNGRY_SECONDS = 1000                # Seconds from fully fed to fully starving.
+HUNGER_THRESHOLD = 0.6               # Fraction of the way to starving before he's hungry
+                                     # (0.6 * 1000s => hungry after ~10 minutes).
 
 # Curiosity -----------------------------------------------------------------
 # Now and then something catches his eye and he trots over to investigate.
-CURIOUS_CHANCE = 0.0009              # Per-frame chance to get curious while idle.
+CURIOUS_CHANCE = 0.0002              # Per-frame chance to get curious while idle (~80s).
 CURIOUS_DURATION = 240               # Frames a curious spell lasts (~4s).
 CURIOUS_SPEED = 1.4                  # Walk speed while investigating.
 
