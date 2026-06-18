@@ -319,6 +319,13 @@ class Pet:
                 oy = random.uniform(WINDOW_H - 6, WINDOW_H)
                 vx = random.uniform(-1.4, 1.4)
                 vy = random.uniform(-0.7, -0.1)
+            elif kind == "popcorn":
+                # Little kernels popping up out of the held tub.
+                life = random.randint(18, 30)
+                ox = random.uniform(-7, 7)
+                oy = random.uniform(WINDOW_H * 0.45, WINDOW_H * 0.7)
+                vx = random.uniform(-0.9, 0.9)
+                vy = random.uniform(-1.7, -0.9)
             else:
                 life = random.randint(42, 66)
                 ox = random.uniform(-9, 9)
@@ -376,6 +383,8 @@ class Pet:
             if self._note_timer <= 0:
                 self._note_timer = random.randint(NOTE_INTERVAL_MIN, NOTE_INTERVAL_MAX)
                 self.spawn_particles("note", 1)
+        elif self.activity == "video" and random.random() < 0.05:
+            self.spawn_particles("popcorn", 1)
         elif self.activity == "gaming" and random.random() < 0.03:
             self.spawn_particles("star", 1)
 

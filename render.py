@@ -281,6 +281,11 @@ NOTE_PIXELS = [
     "#### ",
     "###  ",
 ]
+POPCORN_PIXELS = [
+    "## ",
+    "###",
+    " ##",
+]
 PARTICLE_PIXELS = {
     "heart": (HEART_PIXELS, HEART_COLOR),
     "star": (STAR_PIXELS, STAR_COLOR),
@@ -290,6 +295,7 @@ PARTICLE_PIXELS = {
     "sweat": (SWEAT_PIXELS, SWEAT_COLOR),
     "question": (FONT_5x7["?"], QUESTION_COLOR),
     "note": (NOTE_PIXELS, NOTE_COLOR),
+    "popcorn": (POPCORN_PIXELS, POPCORN_KERNEL),
 }
 _PARTICLE_CACHE = {}
 
