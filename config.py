@@ -93,6 +93,14 @@ DUST_COLOR = (205, 198, 186, 255)
 SWEAT_COLOR = (120, 195, 235, 255)
 QUESTION_COLOR = (255, 236, 150, 255)
 NOTE_COLOR = (176, 150, 240, 255)
+# Combat / removal effect colours.
+SLASH_COLOR = (245, 248, 255, 255)   # White blade streak.
+SPARK_COLOR = (255, 240, 170, 255)   # Bright little sparks.
+BOOM_COLOR = (255, 176, 76, 255)     # Orange impact burst.
+HIT_COLOR = (255, 92, 80, 255)       # Red hit-marker cross.
+BULLET_COLOR = (250, 222, 120, 255)  # Pistol projectile.
+GHOST_COLOR = (214, 224, 244, 255)   # Floating ghost on a ghostly death.
+POOF_COLOR = (236, 238, 244, 255)    # Puff cloud on a poof death.
 
 # App-aware activity props --------------------------------------------------
 # The pet reacts to what you're doing: it works on a laptop during a focus
@@ -123,17 +131,63 @@ ANGRY_THRESHOLD = 3                  # Clicks (before cooling down) that anger t
 ANGRY_DURATION = 240                 # Frames the pet stays grumpy (~4s).
 ANGER_DECAY = 0.015                  # Anger cooled per frame.
 
-# Rage / violence -----------------------------------------------------------
+# Rage / combat -------------------------------------------------------------
 RAGE_THRESHOLD = 6                   # Total anger that tips him into violence.
-RAGE_DURATION = 420                  # Frames he stays violent (~7s) once calm.
+RAGE_DURATION = 600                  # Frames he stays violent once calm (gives him
+                                     # time to actually fight rather than fizzle out).
 RAGE_CHASE_SPEED = 3.4               # How fast he charges the cursor when armed.
-WEAPONS = ["knife", "sword", "pistol"]
-# Capturing the cursor: once he reaches it he locks on for a beat (you can
-# still flee the radius to break it), then a pistol shoots it across the screen
-# while a blade pins it in place.
-RAGE_CAPTURE_RADIUS = 74             # Cursor within this (px of his centre) to lock on.
-RAGE_CHARGE_FRAMES = 90              # Aiming time before he fires (~1.5s to escape).
-RAGE_LOCK_FRAMES = 72                # Frames the cursor stays pinned when locked (~1.2s).
+WEAPONS = ["knife", "sword", "spear", "hammer", "pistol"]
+
+# Per-weapon combat profile. Each weapon feels distinct: the range it strikes
+# from, the windup -> strike -> recovery timing (frames), the cooldown between
+# swings, how far it lunges in, how hard it knocks the cursor back, the effect
+# drawn on a hit, and how many clean hits it takes to corner and capture the
+# cursor. Keep this table the single source of truth so new weapons only need a
+# row here plus pixel art in render.py.
+#   range      : distance (px, pet centre -> cursor) at which he'll swing.
+#   approach   : horizontal gap he tries to close before swinging.
+#   windup     : frames of telegraph before the blow lands.
+#   strike     : frames the hit is "live" (slash/impact visible).
+#   recovery   : frames he's committed after the blow before acting again.
+#   cooldown   : extra frames after recovery before the next swing.
+#   lunge      : px he dashes forward on the strike (0 = stand and poke/shoot).
+#   knockback  : px the cursor is shoved away on a hit.
+#   hits_to_win: clean hits needed before the capture finale triggers.
+#   ranged     : True fires a projectile instead of a melee swing.
+#   effect     : which hit effect render/pet draw ("slash"/"stab"/"smash"/"shot").
+WEAPON_STATS = {
+    "knife": {  # dagger: lightning-fast pokes, close range, light taps.
+        "range": 54, "approach": 40, "windup": 5, "strike": 3, "recovery": 7,
+        "cooldown": 10, "lunge": 8, "knockback": 9, "hits_to_win": 5,
+        "ranged": False, "effect": "slash",
+    },
+    "sword": {  # a quick dash-in and a wide slash, medium range.
+        "range": 82, "approach": 72, "windup": 9, "strike": 5, "recovery": 15,
+        "cooldown": 26, "lunge": 40, "knockback": 28, "hits_to_win": 3,
+        "ranged": False, "effect": "slash",
+    },
+    "spear": {  # reach weapon: jabs from farther out with a short lunge.
+        "range": 120, "approach": 106, "windup": 11, "strike": 5, "recovery": 16,
+        "cooldown": 30, "lunge": 24, "knockback": 22, "hits_to_win": 3,
+        "ranged": False, "effect": "stab",
+    },
+    "hammer": {  # slow, heavy overhead swing with a big impact and knockback.
+        "range": 68, "approach": 56, "windup": 22, "strike": 6, "recovery": 26,
+        "cooldown": 44, "lunge": 12, "knockback": 54, "hits_to_win": 2,
+        "ranged": False, "effect": "smash",
+    },
+    "pistol": {  # ranged: aims, then fires a small projectile from afar.
+        "range": 260, "approach": 200, "windup": 14, "strike": 4, "recovery": 18,
+        "cooldown": 36, "lunge": 0, "knockback": 66, "hits_to_win": 2,
+        "ranged": True, "effect": "shot",
+    },
+}
+
+# Capturing the cursor: after landing hits_to_win clean blows he pounces, pins
+# the pointer for a beat (celebrating), then flings it across the screen and
+# does a little victory dance before calming down.
+CAPTURE_LOCK_FRAMES = 66             # Frames the cursor stays pinned in the finale.
+VICTORY_DURATION = 96                # Frames of celebration after a capture (~1.6s).
 
 # Petting / love ------------------------------------------------------------
 # Petting is a slow back-and-forth stroke of the cursor over the pet. Each
@@ -148,7 +202,25 @@ LOVE_DURATION = 360                  # Frames he stays smitten (~6s) once love f
 LOVE_DECAY = 0.01                    # Love cooled per frame.
 
 # Breeding ------------------------------------------------------------------
+# Breeding is a little courtship: two pets waddle toward each other trailing
+# hearts, and when they meet a baby pops out. The baby starts tiny and grows up,
+# inheriting a blend of its parents' colour, temperament, name, and weapon
+# taste. A cooldown stops it being spammed; MAX_PETS caps the population.
 MAX_PETS = 12                        # Hard cap so breeding can't run away.
+BREED_COOLDOWN = 480                 # Frames between breedings (~8s).
+COURT_SPEED = 1.7                    # Walk speed while waddling toward a mate.
+COURT_REACH = 60                     # Distance (px) at which the parents "meet".
+COURT_TIMEOUT = 360                  # Give up closing the gap after this (~6s).
+COURT_HEART_CHANCE = 0.12            # Per-frame chance of a heart while courting.
+BABY_MIN_SCALE = 0.5                 # How small a newborn starts (fraction of adult).
+BABY_GROW_RATE = 0.0016              # Growth per frame (~10s to reach full size).
+BABY_NAME_SUFFIX = " Jr"             # Appended when a baby takes a parent's name.
+
+# Removal / death -----------------------------------------------------------
+# Removing a pet plays a short, silly send-off instead of a blink-out. Removing
+# every pet at once is gated behind a confirmation so it can't happen by accident.
+DEATH_FRAMES = 60                    # Length of the removal animation (~1s).
+DEATH_KINDS = ["poof", "explosion", "ghost", "fall"]
 
 # Personality & social ------------------------------------------------------
 # Each pet gets a temperament that scales its behaviour: how much it idles vs
@@ -269,6 +341,7 @@ HANDLE_COLOR = (120, 72, 40, 255)
 GUARD_COLOR = (222, 182, 64, 255)
 GUN_COLOR = (58, 60, 70, 255)
 GUN_GRIP_COLOR = (120, 72, 40, 255)
+HAMMER_HEAD_COLOR = (108, 114, 130, 255)  # Dark steel hammer head.
 
 ANGRY_PHRASES = [
     "Hey!",
@@ -504,4 +577,35 @@ PLAY_PHRASES = [
     "Bonk!",
     "Catch me!",
     "Play time!",
+]
+
+VICTORY_PHRASES = [
+    "Victory!",
+    "Too easy!",
+    "Champion!",
+    "Who's next?",
+    "Flawless!",
+    "I win!",
+    "Get rekt!",
+    "Mic drop.",
+    "GG!",
+]
+
+COURT_PHRASES = [
+    "Hello there...",
+    "Be mine?",
+    "You're cute!",
+    "Let's make a family!",
+    "Come closer!",
+    "Heart you!",
+    "Tee-hee!",
+]
+
+BABY_PHRASES = [
+    "Goo goo!",
+    "Hi world!",
+    "I'm new!",
+    "Tiny me!",
+    "Wheee!",
+    "Hewwo!",
 ]

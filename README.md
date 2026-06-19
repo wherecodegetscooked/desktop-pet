@@ -10,8 +10,11 @@ A small desktop companion application implemented in Python that shows a cute vi
 - Pomodoro buddy: "Start Focus (25 min)" in the menu bar makes every pet settle down and work alongside you, then throw a little party when the timer ends.
 - Throwable: flick-drag the pet and let go to launch it into a tumbling arc that bounces off the floor, walls, and windows before settling.
 - Personality: each pet has a name and a recolourable palette — "Rename" and "Recolour" from the menu bar.
-- More moods: he gets hungry over time ("Feed" him from the menu), curious and trots over to investigate, and scared if you shake him.
+- More moods: curious and trots over to investigate, and scared if you shake him.
 - Mini fetch game: "Toss a ball" drops a bouncy ball; the nearest pet chases it down and bats it around.
+- Real combat: poke a pet enough and it boils over, draws a weapon, and goes into combat mode — closing to weapon range, then swinging on a windup → hit → recovery timeline with cooldowns. Each weapon plays differently (fast dagger pokes, a dashing sword slash, a long-reach spear stab, a slow heavy hammer smash, or a pistol that fires a projectile), complete with slash streaks, sparks, impact bursts, and hit markers. After enough clean hits it pounces, captures the cursor, and does a little victory dance.
+- Breeding: "Breed" starts a courtship — two pets waddle together trailing hearts and a baby is born, starting tiny and growing up while inheriting a blend of its parents' colour, temperament, name, and weapon taste. Respects a cooldown and the max-pet cap.
+- Removal: "Remove a pet" gives one a silly send-off (a poof, a tiny explosion, a floating ghost, or a dramatic fall); "Remove all pets…" clears the screen after a confirmation. The app stays stable and usable with zero pets — spawn more with "New pet" or "Breed".
 
 ### Project layout
 - `main.py` — entry point and main loop.

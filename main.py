@@ -25,8 +25,10 @@ import updater
 from ball import Ball
 from config import (
     BALL_WIN,
+    BREED_COOLDOWN,
     BUBBLE_GAP,
     CLEAR,
+    COURT_TIMEOUT,
     FOCUS_MINUTES,
     FPS,
     FX_H,
@@ -41,8 +43,8 @@ from render import (
     draw_ball,
     draw_pet_frame,
     draw_speech_bubble,
-    draw_weapon,
     particle_sprite,
+    weapon_pose,
 )
 from window_tracker import WindowTracker
 
@@ -71,6 +73,18 @@ def spawn_pet(bounds, platforms, x=None, y=None, overlay=None):
     }
 
 
+def _confirm_remove_all(count):
+    """Native confirmation before wiping out every pet. Returns True to proceed."""
+    plural = "s" if count != 1 else ""
+    choice = updater._alert(
+        f"Remove all {count} pet{plural}?\n\nThey'll get a little send-off. You can "
+        "always spawn new ones from the menu.",
+        ["Cancel", "Remove all"],
+        "Cancel",
+    )
+    return choice == "Remove all"
+
+
 def pet_under_point(pets, point):
     """Topmost (most recently spawned) pet whose hitbox contains point."""
     if point is None:
@@ -78,6 +92,8 @@ def pet_under_point(pets, point):
     px, py = point
     for entry in reversed(pets):
         pet = entry["pet"]
+        if pet.dying:
+            continue
         if (
             pet.x - 6 <= px <= pet.x + WINDOW_W + 6
             and pet.y - 6 <= py <= pet.y + WINDOW_H + 6
@@ -149,6 +165,8 @@ def render_pet(entry, display_rects):
 
         for p in pet.particles:
             sprite = particle_sprite(p["kind"])
+            if p.get("flip"):
+                sprite = pygame.transform.flip(sprite, True, False)
             sprite.set_alpha(int(255 * max(0.0, min(1.0, p["life"] / p["maxlife"]))))
             fx_canvas.blit(
                 sprite,
@@ -159,15 +177,8 @@ def render_pet(entry, display_rects):
             )
 
         if pet.weapon:
-            weapon = draw_weapon(pet.weapon)
-            if not pet.facing_right:
-                weapon = pygame.transform.flip(weapon, True, False)
-            hand_y = pet_top + int(WINDOW_H * 0.45)
-            if pet.facing_right:
-                wx = pet_left + WINDOW_W - 8
-            else:
-                wx = pet_left + 8 - weapon.get_width()
-            fx_canvas.blit(weapon, (wx, hand_y))
+            weapon, wdx, wdy = weapon_pose(pet)
+            fx_canvas.blit(weapon, (round(pet_left + wdx), round(pet_top + wdy)))
 
         if pet.talking:
             if pet.speech_dirty or pet.speech_surface is None:
@@ -221,6 +232,13 @@ def main():
     # The first pet reuses the menu-owning primary overlay created above.
     pets = [spawn_pet(bounds, platforms, overlay=primary)]
 
+    # The menu-owning window is special: it hosts the status-bar menu, so it must
+    # stay alive even when every pet is removed. We never close it — when its pet
+    # is culled we just blank it and make it click-through, then reuse it for the
+    # next pet. `menu_overlay_free` is True while no pet's body lives in it.
+    menu_overlay = primary
+    menu_overlay_free = False
+
     # Polls media playback off-thread (music play state + whether sound is
     # actually playing) so the 60 fps loop never blocks on osascript.
     playback_monitor = playback.PlaybackMonitor()
@@ -241,6 +259,72 @@ def main():
     # Self-update: spawn update.sh, show a bubble briefly, then quit so it can
     # pull the latest and relaunch. Counts down frames before quitting.
     pending_update = 0
+    # Breeding: a courtship in progress (or None) plus a cooldown so it can't be
+    # spammed.
+    courting = None
+    breed_cooldown = 0
+
+    def make_pet(x=None, y=None):
+        """Spawn a fresh pet (appended to `pets`), reusing the menu window if it
+        is free so the app recovers cleanly from zero pets."""
+        nonlocal menu_overlay_free
+        if menu_overlay_free:
+            menu_overlay.set_mouse_ignore(False)
+            entry = spawn_pet(bounds, platforms, x=x, y=y, overlay=menu_overlay)
+            menu_overlay.reassert_top()
+            menu_overlay_free = False
+        else:
+            entry = spawn_pet(bounds, platforms, x=x, y=y)
+        if focus_active:
+            entry["pet"].start_focus()
+        pets.append(entry)
+        return entry
+
+    def release_entry(entry):
+        """Tear down a culled pet's overlays. The menu window is kept alive
+        (blanked + click-through) so the menu still works with zero pets."""
+        nonlocal menu_overlay_free
+        entry["fx"].close()
+        if entry["overlay"] is menu_overlay:
+            blank = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
+            blank.fill(CLEAR)
+            menu_overlay.show_surface(blank)
+            menu_overlay.set_mouse_ignore(True)
+            menu_overlay_free = True
+        else:
+            entry["overlay"].close()
+
+    def living_pets():
+        return [e for e in pets if not e["pet"].dying]
+
+    def start_breeding():
+        """Kick off a courtship (or, with no pets, just conjure a new one)."""
+        nonlocal courting, breed_cooldown
+        if courting is not None:
+            return
+        living = living_pets()
+        if len(living) >= MAX_PETS:
+            if living:
+                living[0]["pet"].start_talk("Too crowded!")
+            return
+        if breed_cooldown > 0:
+            if living:
+                living[0]["pet"].start_talk("Not yet!")
+            return
+        if not living:
+            make_pet()  # nothing to breed from — start over with a fresh pet
+            breed_cooldown = BREED_COOLDOWN
+            return
+        if len(living) == 1:
+            a = b = living[0]
+        else:
+            a, b = random.sample(living, 2)
+        mid = (a["pet"].x + b["pet"].x) / 2 + WINDOW_W / 2
+        a["pet"].court_to(mid)
+        if b is not a:
+            b["pet"].court_to(mid)
+        courting = {"a": a, "b": b, "timer": 0}
+        breed_cooldown = BREED_COOLDOWN
 
     while running:
         now = time.monotonic()
@@ -259,59 +343,70 @@ def main():
         last_key_count = key_count
 
         for action in primary.consume_menu_actions():
-            if action == "breed" and len(pets) < MAX_PETS:
-                parent = random.choice(pets)["pet"]
-                mate = random.choice(pets)["pet"]
-                offset = random.choice([-1, 1]) * (WINDOW_W + 12)
-                child = spawn_pet(
-                    bounds,
-                    platforms,
-                    x=parent.x + offset,
-                    y=parent.y,
+            lead = pets[0]["pet"] if pets else None
+            if action == "breed":
+                start_breeding()
+            elif action == "new_pet":
+                if len(living_pets()) < MAX_PETS:
+                    baby = make_pet()
+                    baby["pet"].spawn_particles("star", 4)
+                elif lead:
+                    lead.start_talk("Too crowded!")
+            elif action == "remove":
+                # Topmost living pet gets a dramatic send-off (then it's culled
+                # once the animation finishes).
+                victim = next(
+                    (e for e in reversed(pets) if not e["pet"].dying), None
                 )
-                # The child's temperament is a blend of two pets'.
-                child["pet"].inherit_personality(parent.personality, mate.personality)
-                parent.spawn_particles("heart", 4)
-                if focus_active:
-                    child["pet"].start_focus()
-                pets.append(child)
-            elif action == "remove" and len(pets) > 1:
-                removed = pets.pop()
-                removed["overlay"].close()
-                removed["fx"].close()
-                if removed is drag_target:
+                if victim:
+                    victim["pet"].start_death()
+                    if victim is drag_target:
+                        drag_target = None
+            elif action == "remove_all":
+                living = living_pets()
+                if living and _confirm_remove_all(len(living)):
+                    for entry in living:
+                        entry["pet"].start_death()
                     drag_target = None
+                    if courting is not None:
+                        courting = None
             elif action == "focus_start" and not focus_active:
                 focus_active = True
                 focus_frames_left = focus_total_frames
                 for entry in pets:
                     entry["pet"].start_focus()
-                pets[0]["pet"].start_talk("Focus time!")
+                if lead:
+                    lead.start_talk("Focus time!")
             elif action == "focus_stop" and focus_active:
                 focus_active = False
                 for entry in pets:
                     entry["pet"].end_focus()
             elif action == "ball":
-                lead = pets[0]["pet"]
                 if ball_overlay is None:
                     ball_overlay = MacOverlay(BALL_WIN, BALL_WIN, interactive=False)
-                ball = Ball(lead.x + WINDOW_W / 2, lead.y - 50, bounds)
+                if lead is not None:
+                    bx, by = lead.x + WINDOW_W / 2, lead.y - 50
+                    lead.spawn_particles("star", 2)
+                else:
+                    bx = (bounds[0] + bounds[2]) / 2
+                    by = (bounds[1] + bounds[3]) / 2
+                ball = Ball(bx, by, bounds)
                 ball.kick(random.uniform(-4.0, 4.0), -3.0)
                 ball_overlay.reassert_top()  # re-show if it was hidden on removal
-                lead.spawn_particles("star", 2)
             elif action == "ball_remove" and ball is not None:
                 ball_overlay.close()
                 ball = None
-            elif action == "recolour":
-                pets[0]["pet"].cycle_palette()
-            elif action == "rename":
-                pets[0]["pet"].rename()
+            elif action == "recolour" and lead:
+                lead.cycle_palette()
+            elif action == "rename" and lead:
+                lead.rename()
             elif action == "update" and not pending_update:
                 # updater shows its own dialogs (up to date / found / failed);
                 # we only act when it kicks off the download + relaunch.
                 proj = os.path.dirname(os.path.abspath(__file__))
                 if updater.check_for_updates(proj) == "updating":
-                    pets[0]["pet"].start_talk("Updating!")
+                    if lead:
+                        lead.start_talk("Updating!")
                     pending_update = 36  # show the bubble, then quit to relaunch
 
         if now - last_window_scan > 0.75:
@@ -347,7 +442,7 @@ def main():
         # click never sticks a pet as the drag target (which would freeze it).
         if drag["dragging"] and drag["moved"]:
             if drag_target is None and drag["position"]:
-                drag_target = pet_under_point(pets, mouse) or pets[0]
+                drag_target = pet_under_point(pets, mouse)
             if drag_target and drag["position"]:
                 drag_target["pet"].drag_to(*drag["position"])
         elif not drag["dragging"]:
@@ -356,8 +451,9 @@ def main():
             drag_target = None
 
         if drag["clicks"]:
-            target = pet_under_point(pets, mouse) or pets[0]
-            target["pet"].on_click(drag["clicks"], mouse)
+            target = pet_under_point(pets, mouse) or (pets[0] if pets else None)
+            if target and not target["pet"].dying:
+                target["pet"].on_click(drag["clicks"], mouse)
 
         # Advance the fetch ball before the pets so they react to its new spot.
         if ball is not None:
@@ -385,6 +481,49 @@ def main():
             if pet.cursor_lock is not None:
                 primary.warp_cursor(*pet.cursor_lock)
 
+        # Cull pets whose removal animation has finished, keeping the menu window
+        # alive so the app stays usable even at zero pets.
+        if any(entry["pet"].dead for entry in pets):
+            for entry in pets:
+                if entry["pet"].dead:
+                    if entry is drag_target:
+                        drag_target = None
+                    release_entry(entry)
+            pets = [entry for entry in pets if not entry["pet"].dead]
+
+        # Courtship: drive the two parents together; when they meet (or time out)
+        # a baby is born at the midpoint and inherits a blend of their traits.
+        if courting is not None:
+            a_entry, b_entry = courting["a"], courting["b"]
+            a_pet, b_pet = a_entry["pet"], b_entry["pet"]
+            courting["timer"] += 1
+            gone = (
+                a_entry not in pets
+                or b_entry not in pets
+                or a_pet.dying or b_pet.dying
+                or a_pet.rage or b_pet.rage
+                or a_pet.scared or b_pet.scared
+            )
+            ready = a_pet.court_arrived and (b_pet is a_pet or b_pet.court_arrived)
+            if gone:
+                a_pet.stop_courting()
+                b_pet.stop_courting()
+                courting = None
+            elif ready or courting["timer"] >= COURT_TIMEOUT:
+                if len(living_pets()) < MAX_PETS:
+                    midx = (a_pet.x + b_pet.x) / 2
+                    midy = min(a_pet.y, b_pet.y)
+                    baby = make_pet(x=midx, y=midy)
+                    baby["pet"].make_baby(a_pet, b_pet)
+                    a_pet.spawn_particles("heart", 4)
+                    b_pet.spawn_particles("heart", 4)
+                a_pet.stop_courting()
+                b_pet.stop_courting()
+                courting = None
+
+        if breed_cooldown > 0:
+            breed_cooldown -= 1
+
         # Pomodoro countdown: when the focus timer elapses, everyone celebrates.
         if focus_active:
             focus_frames_left -= 1
@@ -392,7 +531,8 @@ def main():
                 focus_active = False
                 for entry in pets:
                     entry["pet"].end_focus(party=True)
-                pets[0]["pet"].start_talk("Break time!")
+                if pets:
+                    pets[0]["pet"].start_talk("Break time!")
 
         for entry in pets:
             render_pet(entry, display_rects)

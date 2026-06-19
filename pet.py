@@ -71,15 +71,25 @@ from config import (
     PLATFORM_DROP_CHANCE,
     PLATFORM_EDGE_MARGIN,
     RAGE_AIM_PHRASES,
-    RAGE_CAPTURE_RADIUS,
     RAGE_CATCH_PHRASES,
-    RAGE_CHARGE_FRAMES,
     RAGE_CHASE_SPEED,
     RAGE_DURATION,
-    RAGE_LOCK_FRAMES,
     RAGE_LOCK_PHRASES,
     RAGE_PHRASES,
     RAGE_THRESHOLD,
+    CAPTURE_LOCK_FRAMES,
+    VICTORY_DURATION,
+    VICTORY_PHRASES,
+    COURT_SPEED,
+    COURT_REACH,
+    COURT_HEART_CHANCE,
+    COURT_PHRASES,
+    BABY_GROW_RATE,
+    BABY_NAME_SUFFIX,
+    BABY_PHRASES,
+    DEATH_FRAMES,
+    DEATH_KINDS,
+    WEAPON_STATS,
     RANDOM_JUMP_STATE_CHANCE,
     RIGHT_DAMPING,
     RIGHT_SETTLE,
@@ -155,18 +165,34 @@ class Pet:
         self.anger = 0.0
         self.angry = False
         self.angry_timer = 0
-        # Violence: once anger boils over he arms himself and chases the cursor.
+        # Violence: once anger boils over he arms himself and goes into combat.
         self.rage = False
         self.rage_timer = 0
         self.weapon = None
-        # Cursor capture. He locks on for a beat, then shoots the pointer away
-        # (cursor_grab: one-shot warp target) or pins it (cursor_lock: the main
-        # loop warps to this every frame until released). Both None when idle.
+        # Each pet has a favourite weapon it reaches for when enraged; bred
+        # children inherit a parent's taste (see make_baby).
+        self.weapon_pref = random.choice(WEAPONS)
+        # Combat timeline: an attack runs windup -> strike -> recovery, then a
+        # cooldown before the next one. He lands clean hits until enough connect
+        # to trigger the capture finale.
+        self.combat_phase = None     # None | "windup" | "strike" | "recovery"
+        self.phase_timer = 0
+        self.phase_max = 1
+        self.attack_cooldown = 0
+        self.hits_landed = 0
+        self._aim = None             # cursor pos committed to at swing start
+        self.attack_landed = False
+        # Cursor capture. The finale pins the pointer (cursor_lock: the main loop
+        # warps to this every frame until released), then flings it once
+        # (cursor_grab: one-shot warp target). Individual hits also knock the
+        # cursor back via cursor_grab. All None when idle.
         self.cursor_grab = None
         self.cursor_lock = None
         self.capturing = False
-        self.capture_timer = 0
         self.lock_timer = 0
+        # Victory: a short celebration after a successful capture.
+        self.victory = False
+        self.victory_timer = 0
         # Affection: slow strokes make him fall in love.
         self.love = 0.0
         self.loved = False
@@ -215,6 +241,20 @@ class Pet:
         self.social_timer = 0
         self.social_target_x = 0.0
         self._peers = []
+        # Breeding: babies grow from BABY_MIN_SCALE up to full size; courting
+        # pets waddle toward a meeting point trading hearts.
+        self.baby = False
+        self.growth = 1.0
+        self.courting = False
+        self.court_target_x = 0.0
+        self.court_timer = 0
+        self.court_arrived = False
+        # Removal: a short send-off animation before the pet is culled.
+        self.dying = False
+        self.dead = False
+        self.death_kind = ""
+        self.death_timer = 0
+        self.death_max = 1
         # Extra moods.
         self.curious = False
         self.curious_timer = 0
@@ -230,6 +270,8 @@ class Pet:
             return "angry"
         if self.scared:
             return "scared"
+        if self.victory:
+            return "victory"
         if self.asleep:
             return "asleep"
         if self.loved:
@@ -245,6 +287,10 @@ class Pet:
     def _phrase_pool(self):
         if self.rage:
             return RAGE_PHRASES
+        if self.victory:
+            return VICTORY_PHRASES
+        if self.courting:
+            return COURT_PHRASES
         if self.angry:
             return ANGRY_PHRASES
         if self.scared:
@@ -362,11 +408,33 @@ class Pet:
                 }
             )
 
+    def _add_particle(self, kind, x, y, vx, vy, life, grav=0.02, flip=False):
+        """Append a fully-specified particle at an arbitrary world position.
+
+        Used by the combat and removal effects, which need to place sprites at
+        the cursor / impact point rather than around the pet's head like
+        spawn_particles does."""
+        if len(self.particles) >= MAX_PARTICLES:
+            return
+        self.particles.append(
+            {
+                "kind": kind,
+                "x": x,
+                "y": y,
+                "vx": vx,
+                "vy": vy,
+                "life": life,
+                "maxlife": life,
+                "grav": grav,
+                "flip": flip,
+            }
+        )
+
     def _update_particles(self):
         for p in self.particles:
             p["x"] += p["vx"]
             p["y"] += p["vy"]
-            p["vy"] += 0.02
+            p["vy"] += p.get("grav", 0.02)
             p["life"] -= 1
         if self.particles:
             self.particles = [p for p in self.particles if p["life"] > 0]
@@ -534,17 +602,38 @@ class Pet:
         self.start_talk(random.choice(ANGRY_PHRASES))
 
     def _become_rage(self):
-        """Boil over: arm himself and go after whoever is poking him."""
+        """Boil over: draw the favourite weapon and switch into combat mode."""
         self.rage = True
         self.angry = True
         self.angry_timer = ANGRY_DURATION
         self.rage_timer = RAGE_DURATION
-        self.weapon = random.choice(WEAPONS)
+        self.weapon = self.weapon_pref or random.choice(WEAPONS)
+        self._reset_combat()
         self.following = False
+        self.socializing = False
+        self.courting = False
         self.loved = False
+        self.victory = False
         self.love = 0.0
+        # A beat of drawing the weapon: brace, face nothing in particular, and
+        # throw out a couple of warning sparks before the chase begins.
+        self.vx = 0.0
+        self.state = State.IDLE
         self.spawn_particles("anger", 8)
         self.start_talk(random.choice(RAGE_PHRASES))
+
+    def _reset_combat(self):
+        """Clear the per-fight combat timeline (between fights / on calming)."""
+        self.combat_phase = None
+        self.phase_timer = 0
+        self.phase_max = 1
+        self.attack_cooldown = 18  # brief beat to draw the weapon before swinging
+        self.hits_landed = 0
+        self._aim = None
+        self.attack_landed = False
+
+    def _weapon_stats(self):
+        return WEAPON_STATS.get(self.weapon or "knife", WEAPON_STATS["knife"])
 
     # -- Petting / affection ----------------------------------------------
 
@@ -602,9 +691,11 @@ class Pet:
                 and self.anger < 1.0
                 and not self.capturing
                 and self.lock_timer <= 0
+                and not self.combat_phase
             ):
                 self.rage = False
                 self.weapon = None
+                self._reset_combat()
         if self.angry:
             self.angry_timer -= 1
             if self.angry_timer <= 0 and self.anger < 1.0 and not self.rage:
@@ -649,6 +740,7 @@ class Pet:
         self.scared_timer = SCARED_DURATION
         self.curious = False
         self.following = False
+        self.courting = False
         self.loved = False
         self.spawn_particles("sweat", random.randint(2, 3))
         self.start_talk(random.choice(SCARED_PHRASES))
@@ -729,61 +821,46 @@ class Pet:
             self.state = State.RUN
             self.state_timer = 20
 
-    def _update_rage(self, mouse, platforms):
-        """Aggressively pursue the cursor on foot: run toward it, jump up onto
-        windows to climb toward it, and drop off ledges to descend to it. On
-        contact he pounces and flings the cursor away. Respects gravity and
-        platforms — he never flies straight at it."""
+    # -- Combat ------------------------------------------------------------
+
+    def _update_combat(self, mouse, platforms):
+        """Run the combat brain while enraged: close to weapon range, then run
+        the windup -> strike -> recovery timeline. Each weapon has its own reach,
+        timing, lunge, and effect (see WEAPON_STATS). After enough clean hits he
+        pounces and captures the cursor. Respects gravity and platforms — he
+        never flies straight at it."""
+        stats = self._weapon_stats()
+
+        # Mid-swing: finish the committed attack regardless of cursor movement.
+        # Fall back to the aim point if the cursor reading is momentarily gone.
+        if self.combat_phase:
+            self._advance_attack(mouse if mouse is not None else self._aim, stats)
+            return
+
         if mouse is None:
             return
+
+        self.attack_cooldown = max(0, self.attack_cooldown - 1)
+
         center_x = self.x + WINDOW_W / 2
         center_y = self.y + WINDOW_H / 2
-
         dist = math.hypot(mouse[0] - center_x, mouse[1] - center_y)
+        grounded = not self.airborne and self.state != State.JUMP
 
-        # Locking on: plant and aim. Breaks if the cursor leaves the radius
-        # before the charge completes (you get ~1.5s to move it away).
-        if self.capturing:
-            if dist > RAGE_CAPTURE_RADIUS:
-                self.capturing = False
-                self.capture_timer = 0
-            else:
-                self.vx = 0.0
-                self.state = State.IDLE
-                self.facing_right = mouse[0] >= center_x
-                self.capture_timer -= 1
-                if self.capture_timer % 8 == 0:
-                    self.spawn_particles("anger", 1)
-                if self.capture_timer <= 0:
-                    self._fire_at_cursor(mouse)
-                return
-
-        # Start locking on once the cursor is in reach and he's on his feet.
-        if (
-            dist <= RAGE_CAPTURE_RADIUS
-            and not self.airborne
-            and self.state != State.JUMP
-        ):
-            self.capturing = True
-            self.capture_timer = RAGE_CHARGE_FRAMES
-            if not self.weapon:
-                self.weapon = random.choice(WEAPONS)
-            self.vx = 0.0
-            self.state = State.IDLE
-            self.facing_right = mouse[0] >= center_x
-            self.start_talk(random.choice(RAGE_AIM_PHRASES))
+        # In range, off cooldown, on his feet: commit to a swing/shot.
+        if dist <= stats["range"] and self.attack_cooldown == 0 and grounded:
+            self._start_attack(mouse, stats)
             return
 
-        if self.airborne or self.state == State.JUMP:
+        if not grounded:
             return  # let the current jump arc finish
 
+        # Otherwise position for the weapon: close the horizontal gap to roughly
+        # the weapon's preferred standoff, climbing or dropping to match height.
         feet_y = self.y + WINDOW_H
         dx = mouse[0] - self._feet_x()
         dy = mouse[1] - feet_y
 
-        # Cursor is well below and he's stranded on a window ledge: drop off it
-        # to chase downward (the old code could only climb, so he got stuck up
-        # high above a low cursor).
         on_ledge = (
             self.platform is not None
             and self.platform["name"] != GROUND_PLATFORM_NAME
@@ -792,54 +869,186 @@ class Pet:
             self.drop()
             return
 
-        if abs(dx) > 8:
+        if abs(dx) > stats["approach"]:
             self.vx = (1 if dx > 0 else -1) * RAGE_CHASE_SPEED
             self.state = State.RUN
+            self.facing_right = dx > 0
         else:
+            # Within standoff but not yet in striking range (e.g. cursor above):
+            # hold, face the target, and brace for the next swing.
             self.vx = 0.0
             self.state = State.IDLE
-            if random.random() < 0.2:
+            self.facing_right = mouse[0] >= center_x
+            if random.random() < 0.08:
                 self.spawn_particles("anger", 1)
-        if self.vx > 0.1:
-            self.facing_right = True
-        elif self.vx < -0.1:
-            self.facing_right = False
         self.state_timer = 30
         # Climb toward the cursor when it's above him, hopping window to window.
         if mouse[1] < feet_y - 40:
             self._rage_jump(mouse, platforms)
 
-    def _fire_at_cursor(self, mouse):
-        """Charge complete: a pistol shoots the cursor across the screen; a
-        blade pins it in place for a moment instead."""
-        self.capturing = False
-        self.capture_timer = 0
-        self.spawn_particles("anger", 3)
-        if self.weapon == "pistol":
-            self.spawn_particles("star", 4)
-            # Shoot it somewhere across the desktop, up in the top portion so it
-            # reads as "flung away" rather than landing back on him.
-            span_y = self.max_y - self.min_y
-            self.cursor_grab = (
-                random.uniform(self.min_x + 40, self.max_x - 40),
-                random.uniform(self.min_y + 40, self.min_y + span_y * 0.4),
-            )
-            self.start_talk(random.choice(RAGE_CATCH_PHRASES))
-            self._calm_after_capture()
+    def _start_attack(self, mouse, stats):
+        """Commit to a swing: lock the aim, face the target, begin the windup."""
+        center_x = self.x + WINDOW_W / 2
+        self.combat_phase = "windup"
+        self.phase_timer = stats["windup"]
+        self.phase_max = max(1, stats["windup"])
+        self._aim = (mouse[0], mouse[1])
+        self.attack_landed = False
+        self.facing_right = mouse[0] >= center_x
+        self.vx = 0.0
+        self.state = State.IDLE
+        self.spawn_particles("anger", 1)  # a small telegraph
+        if random.random() < 0.4:
+            self.start_talk(random.choice(RAGE_AIM_PHRASES))
+
+    def _advance_attack(self, mouse, stats):
+        """Tick the windup -> strike -> recovery timeline frame by frame."""
+        self.vx = 0.0
+        self.phase_timer -= 1
+        if self.combat_phase == "windup":
+            self.state = State.IDLE
+            if self.phase_timer <= 0:
+                self._do_strike(mouse, stats)
+        elif self.combat_phase == "strike":
+            if self.phase_timer <= 0:
+                self.combat_phase = "recovery"
+                self.phase_timer = stats["recovery"]
+                self.phase_max = max(1, stats["recovery"])
+        elif self.combat_phase == "recovery":
+            if self.phase_timer <= 0:
+                self.combat_phase = None
+                self.attack_cooldown = stats["cooldown"]
+                if self.hits_landed >= stats["hits_to_win"]:
+                    self._begin_capture(mouse)
+
+    def _do_strike(self, mouse, stats):
+        """The blow lands: lunge in, draw the effect, and (if it connects) knock
+        the cursor back and count the hit."""
+        self.combat_phase = "strike"
+        self.phase_timer = stats["strike"]
+        self.phase_max = max(1, stats["strike"])
+        sign = 1 if self.facing_right else -1
+        center_x = self.x + WINDOW_W / 2
+        center_y = self.y + WINDOW_H / 2
+
+        # Dash in (blades lunge a lot, pistol not at all). Horizontal only so he
+        # stays grounded.
+        lunge = stats.get("lunge", 0)
+        if lunge:
+            self.x = max(self.min_x, min(self.max_x - WINDOW_W, self.x + sign * lunge))
+            self._spawn_dust()
+            center_x = self.x + WINDOW_W / 2
+
+        aim = mouse if mouse is not None else self._aim
+        if aim is None:
+            return
+        ang = math.atan2(aim[1] - center_y, aim[0] - center_x)
+        reach = stats["range"] * 0.7
+        tip_x = center_x + math.cos(ang) * reach
+        tip_y = center_y + math.sin(ang) * reach
+
+        if stats["ranged"]:
+            self._fire_projectile(center_x, center_y, sign, aim)
+
+        # Connect check against the (possibly lunged) pet centre.
+        dist = math.hypot(aim[0] - center_x, aim[1] - center_y)
+        if dist <= stats["range"] * 1.15:
+            self.attack_landed = True
+            self.hits_landed += 1
+            fx_x, fx_y = (aim[0], aim[1]) if stats["ranged"] else (tip_x, tip_y)
+            self._combat_fx(stats["effect"], fx_x, fx_y, sign)
+            self._add_particle("hit", aim[0], aim[1], 0.0, -0.4, 16, grav=0.0)
+            self._knockback_cursor(aim, center_x, center_y, stats["knockback"])
+            if random.random() < 0.35:
+                self.start_talk(random.choice(RAGE_CATCH_PHRASES))
         else:
-            self.cursor_lock = (mouse[0], mouse[1])
-            self.lock_timer = RAGE_LOCK_FRAMES
-            self.start_talk(random.choice(RAGE_LOCK_PHRASES))
+            # A whiff: just a little dust off the swing.
+            self._add_particle("dust", tip_x, tip_y + 4, sign * 0.6, -0.2, 12)
+
+    def _fire_projectile(self, center_x, center_y, sign, aim):
+        """Pistol shot: a muzzle flash and a bullet streaking toward the aim."""
+        mux = center_x + sign * WINDOW_W * 0.42
+        muy = center_y
+        self._add_particle("spark", mux, muy, sign * 1.6, 0.0, 6, grav=0.0)
+        bdx = aim[0] - mux
+        bdy = aim[1] - muy
+        bdist = max(1.0, math.hypot(bdx, bdy))
+        speed = 16.0
+        self._add_particle(
+            "bullet", mux, muy, bdx / bdist * speed, bdy / bdist * speed,
+            int(bdist / speed) + 2, grav=0.0,
+        )
+
+    def _knockback_cursor(self, aim, center_x, center_y, amount):
+        """Shove the cursor away from the pet by `amount` px (clamped on-screen)."""
+        if not amount:
+            return
+        kdx = aim[0] - center_x
+        kdy = aim[1] - center_y
+        kd = max(1.0, math.hypot(kdx, kdy))
+        nx = max(self.min_x + 4, min(self.max_x - 4, aim[0] + kdx / kd * amount))
+        ny = max(self.min_y + 4, min(self.max_y - 4, aim[1] + kdy / kd * amount))
+        self.cursor_grab = (nx, ny)
+
+    def _combat_fx(self, effect, x, y, sign):
+        """Spawn the pixel hit effect for a weapon at the impact point."""
+        if effect == "slash":
+            self._add_particle("slash", x, y, sign * 0.6, -0.3, 9, grav=0.0,
+                               flip=sign < 0)
+            for _ in range(4):
+                self._add_particle("spark", x, y, random.uniform(-2, 2) + sign,
+                                   random.uniform(-2, 1), random.randint(8, 14),
+                                   grav=0.12)
+        elif effect == "stab":
+            self._add_particle("slash", x, y, sign * 1.2, 0.0, 8, grav=0.0,
+                               flip=sign < 0)
+            for _ in range(3):
+                self._add_particle("spark", x, y, sign * random.uniform(0.5, 2.5),
+                                   random.uniform(-1, 1), random.randint(6, 12),
+                                   grav=0.1)
+        elif effect == "smash":
+            self._add_particle("boom", x, y, 0.0, 0.0, 14, grav=0.0)
+            for _ in range(6):
+                self._add_particle("spark", x, y, random.uniform(-3, 3),
+                                   random.uniform(-3, 0.5), random.randint(10, 18),
+                                   grav=0.18)
+            self._add_particle("dust", x - 4, y + 6, -1.2, -0.2, 18, grav=0.05)
+            self._add_particle("dust", x + 4, y + 6, 1.2, -0.2, 18, grav=0.05)
+        elif effect == "shot":
+            self._add_particle("boom", x, y, 0.0, 0.0, 10, grav=0.0)
+            for _ in range(4):
+                self._add_particle("spark", x, y, random.uniform(-2, 2),
+                                   random.uniform(-2, 2), random.randint(6, 12),
+                                   grav=0.1)
+
+    def _begin_capture(self, mouse):
+        """Enough clean hits landed — pounce, pin the cursor, and celebrate."""
+        aim = mouse if mouse is not None else self._aim
+        self.capturing = True
+        self.combat_phase = None
+        if aim is not None:
+            self.cursor_lock = (aim[0], aim[1])
+        self.lock_timer = CAPTURE_LOCK_FRAMES
+        self.spawn_particles("star", 5)
+        self.spawn_particles("heart", 3)
+        self.start_talk(random.choice(RAGE_LOCK_PHRASES))
 
     def _release_cursor(self):
-        """End a pin: let the pointer go, gloat, and calm down."""
+        """End the pin: fling the pointer away and break into a victory dance."""
         self.cursor_lock = None
-        self.spawn_particles("star", 3)
+        span_y = self.max_y - self.min_y
+        self.cursor_grab = (
+            random.uniform(self.min_x + 40, self.max_x - 40),
+            random.uniform(self.min_y + 40, self.min_y + span_y * 0.4),
+        )
+        self.spawn_particles("star", 6)
         self.start_talk(random.choice(RAGE_CATCH_PHRASES))
         self._calm_after_capture()
+        self.victory = True
+        self.victory_timer = VICTORY_DURATION
 
     def _calm_after_capture(self):
-        """Revenge served — drop the weapon and cool off."""
+        """Revenge served — drop the weapon and cool right off."""
         self.rage = False
         self.rage_timer = 0
         self.weapon = None
@@ -847,7 +1056,7 @@ class Pet:
         self.angry_timer = 0
         self.anger = 0.0
         self.capturing = False
-        self.capture_timer = 0
+        self._reset_combat()
 
     def _rage_jump(self, mouse, platforms):
         """Jump onto whichever reachable window edge gets him closest to the
@@ -986,6 +1195,149 @@ class Pet:
         if self._trait("play") > 1.3 and self.jump_cooldown == 0 and not self.airborne:
             self.start_jump()
 
+    # -- Breeding (courtship & growing up) ---------------------------------
+
+    def make_baby(self, parent_a, parent_b):
+        """Turn this freshly-spawned pet into parent_a & parent_b's child:
+        inherit a blended temperament, one parent's colours, a name (sometimes a
+        'Jr' of a parent's), and a weapon taste — then start tiny and grow up."""
+        self.inherit_personality(parent_a.personality, parent_b.personality)
+        # Colour: take after one parent.
+        source = random.choice([parent_a, parent_b])
+        self.palette_index = source.palette_index
+        self.palette = source.palette
+        # Name: half the time a parent's name with a 'Jr', else a fresh one.
+        if random.random() < 0.5:
+            self.name = random.choice([parent_a.name, parent_b.name]) + BABY_NAME_SUFFIX
+        else:
+            self.name = random.choice(PET_NAMES)
+        # Weapon taste leans on the parents'.
+        self.weapon_pref = random.choice(
+            [parent_a.weapon_pref, parent_b.weapon_pref]
+        )
+        self.baby = True
+        self.growth = 0.0
+        self.spawn_particles("heart", 4)
+        self.start_talk(random.choice(BABY_PHRASES))
+
+    def court_to(self, target_x):
+        """Waddle toward a meeting point to breed (set by the breeding manager)."""
+        if self.rage or self.scared or self.asleep or self.airborne or self.dying:
+            return
+        self.courting = True
+        self.court_target_x = float(target_x)
+        self.court_timer = 0
+        self.court_arrived = False
+        self.following = False
+        self.socializing = False
+        if self.talking:
+            self._stop_talking(repick=False)
+
+    def stop_courting(self):
+        self.courting = False
+        self.court_arrived = False
+
+    def _update_court(self):
+        """Walk toward the rendezvous, trailing hearts; settle once there."""
+        self.court_timer += 1
+        dx = self.court_target_x - self._feet_x()
+        if abs(dx) <= COURT_REACH:
+            self.court_arrived = True
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.facing_right = dx >= 0
+            if random.random() < COURT_HEART_CHANCE:
+                self.spawn_particles("heart", 1)
+            return
+        direction = 1 if dx > 0 else -1
+        self.vx = direction * COURT_SPEED * self._trait("speed")
+        self.facing_right = direction > 0
+        self.state = State.WALK
+        self.state_timer = 20
+        if random.random() < COURT_HEART_CHANCE * 0.5:
+            self.spawn_particles("heart", 1)
+
+    def _update_growth(self):
+        """Grow a baby up to full size, sparkling once it finishes."""
+        if not self.baby:
+            return
+        self.growth = min(1.0, self.growth + BABY_GROW_RATE)
+        if self.growth >= 1.0:
+            self.baby = False
+            self.spawn_particles("star", 4)
+            self.start_talk("All grown up!")
+
+    # -- Removal (death animation) ----------------------------------------
+
+    def start_death(self, kind=None):
+        """Begin a short send-off animation; the main loop culls the pet once
+        death_timer runs out (self.dead). A no-op if already on the way out."""
+        if self.dying:
+            return
+        self.dying = True
+        self.dead = False
+        self.death_kind = kind or random.choice(DEATH_KINDS)
+        self.death_timer = DEATH_FRAMES
+        self.death_max = DEATH_FRAMES
+        # Stop everything else cleanly.
+        self.rage = False
+        self.weapon = None
+        self.cursor_lock = None
+        self.capturing = False
+        self.lock_timer = 0
+        self.following = False
+        self.socializing = False
+        self.courting = False
+        if self.talking:
+            self._stop_talking(repick=False)
+        cx = self.x + WINDOW_W / 2
+        cy = self.y + WINDOW_H / 2
+        if self.death_kind == "poof":
+            for _ in range(6):
+                self._add_particle("poof", cx + random.uniform(-10, 10),
+                                   cy + random.uniform(-8, 8),
+                                   random.uniform(-1.2, 1.2), random.uniform(-1.4, -0.2),
+                                   random.randint(20, 32), grav=0.02)
+        elif self.death_kind == "explosion":
+            self._add_particle("boom", cx, cy, 0.0, 0.0, 18, grav=0.0)
+            for _ in range(10):
+                self._add_particle("spark", cx, cy, random.uniform(-4, 4),
+                                   random.uniform(-4, 1), random.randint(12, 22),
+                                   grav=0.15)
+            self.spawn_particles("anger", 3)
+        elif self.death_kind == "ghost":
+            self._add_particle("ghost", cx, cy, 0.0, -0.8, DEATH_FRAMES, grav=0.0)
+        elif self.death_kind == "fall":
+            self.spin_speed = random.choice([-1, 1]) * random.uniform(8, 14)
+            self.jump_vy = -2.0
+            self._spawn_dust()
+
+    def _update_death(self):
+        """Advance the send-off; spawn its trailing particles and mark dead."""
+        self.death_timer -= 1
+        k = self.death_kind
+        cx = self.x + WINDOW_W / 2
+        cy = self.y + WINDOW_H / 2
+        if k == "poof":
+            if self.death_timer % 4 == 0:
+                self._add_particle("poof", cx + random.uniform(-8, 8),
+                                   cy + random.uniform(-6, 6),
+                                   random.uniform(-0.8, 0.8), random.uniform(-1.0, -0.2),
+                                   random.randint(16, 26), grav=0.02)
+        elif k == "explosion":
+            if self.death_timer % 5 == 0:
+                self._add_particle("spark", cx, cy, random.uniform(-3, 3),
+                                   random.uniform(-3, 0.5), random.randint(10, 18),
+                                   grav=0.15)
+        elif k == "ghost":
+            self.y -= 1.3  # float upward as a little ghost
+        elif k == "fall":
+            self.angle += self.spin_speed
+            self.jump_vy += GRAVITY
+            self.y += self.jump_vy
+        if self.death_timer <= 0:
+            self.dead = True
+
     def pick_state(self):
         if self.focusing and not self.rage:
             # Heads-down: mostly sit and work, with the occasional short shuffle.
@@ -1081,16 +1433,40 @@ class Pet:
         self.speech_cooldown = max(0, self.speech_cooldown - 1)
         self._update_face()
         self._update_particles()
+
+        # On the way out: play the send-off and nothing else.
+        if self.dying:
+            self._update_death()
+            return
+
+        self._update_growth()
         self._update_mood()
+
+        # Victory lap after a successful capture: bounce and sparkle for a beat
+        # while otherwise behaving normally (he's calmed down by now).
+        if self.victory:
+            self.victory_timer -= 1
+            if self.victory_timer % 12 == 0:
+                self.spawn_particles(random.choice(["star", "heart"]), 1)
+            if (
+                self.victory_timer % 24 == 0
+                and self.jump_cooldown == 0
+                and not self.airborne
+                and self.state in (State.IDLE, State.WALK)
+            ):
+                self.start_jump()
+            if self.victory_timer <= 0:
+                self.victory = False
 
         # A pinned cursor counts down and releases on its own, independent of
         # mood — so it can never get stuck held (e.g. if rage lapses mid-pin).
+        # While pinned he gleefully bounces on his catch and showers it in stars.
         if self.lock_timer > 0:
             self.vx = 0.0
             self.state = State.IDLE
             self.lock_timer -= 1
             if self.lock_timer % 6 == 0:
-                self.spawn_particles("anger", 1)
+                self.spawn_particles(random.choice(["star", "heart", "anger"]), 1)
             if self.lock_timer <= 0:
                 self._release_cursor()
             return
@@ -1109,13 +1485,13 @@ class Pet:
         self._activity_fx()
 
         if self.rage:
-            # Armed and furious: chase the cursor on foot (jumping across
-            # windows), but keep the bubble counting down so it never roots him.
+            # Armed and in combat: position for the weapon and run the attack
+            # timeline, but keep the bubble counting down so it never roots him.
             if self.talking:
                 self.speech_timer -= 1
                 if self.speech_timer <= 0:
                     self._stop_talking(repick=False)
-            self._update_rage(mouse, platforms)
+            self._update_combat(mouse, platforms)
         else:
             if self.talking and self._update_talking():
                 return
@@ -1132,6 +1508,9 @@ class Pet:
                 # Spooked: tremble in place; no chasing, fetching, or wandering.
                 if grounded:
                     self._update_scared(mouse)
+            elif self.courting and grounded:
+                # Courtship: waddle to the rendezvous and wait there for a mate.
+                self._update_court()
             elif self.focusing:
                 # Heads-down: stays put (pick_state keeps him calm).
                 pass
@@ -1152,6 +1531,7 @@ class Pet:
                 if (
                     not self.following
                     and not self.socializing
+                    and not self.courting
                     and grounded
                 ):
                     if not self._maybe_drop_through_platform():
@@ -1294,6 +1674,8 @@ class Pet:
         self.state = State.IDLE
         self.state_timer = 60
         self.following = False
+        self.courting = False
+        self.court_arrived = False
         if self.talking:
             self._stop_talking(repick=False)
 

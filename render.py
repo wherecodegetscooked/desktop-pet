@@ -9,6 +9,7 @@ import pygame
 
 from config import (
     ANGER_COLOR,
+    BABY_MIN_SCALE,
     BALL_BASE_R,
     BALL_COLOR,
     BALL_HIGHLIGHT,
@@ -16,22 +17,27 @@ from config import (
     BALL_SHADE,
     BALL_WIN,
     BELLY_COLOR,
+    BOOM_COLOR,
     BUBBLE_FILL_COLOR,
     BUBBLE_MAX_TEXT_W,
     BUBBLE_SCALE,
     BUBBLE_TEXT_COLOR,
+    BULLET_COLOR,
     CLEAR,
     DUST_COLOR,
     EYE_COLOR,
     EYE_WHITE,
+    GHOST_COLOR,
     GUARD_COLOR,
     GUN_COLOR,
     GUN_GRIP_COLOR,
+    HAMMER_HEAD_COLOR,
     HANDLE_COLOR,
     HEADPHONE_BAND,
     HEADPHONE_CUP,
     HEART_COLOR,
     HIGHLIGHT,
+    HIT_COLOR,
     LAPTOP_BASE,
     LAPTOP_KEY,
     LAPTOP_LID,
@@ -41,10 +47,13 @@ from config import (
     PARTICLE_SCALE,
     PET_COLOR,
     PET_SHADE,
+    POOF_COLOR,
     POPCORN_BUCKET,
     POPCORN_KERNEL,
     POPCORN_STRIPE,
     QUESTION_COLOR,
+    SLASH_COLOR,
+    SPARK_COLOR,
     SPRITE_H,
     SPRITE_W,
     STAR_COLOR,
@@ -286,6 +295,53 @@ POPCORN_PIXELS = [
     "###",
     " ##",
 ]
+# Combat / removal effect sprites.
+SLASH_PIXELS = [
+    "    #",
+    "   ##",
+    "  ## ",
+    " ##  ",
+    "##   ",
+]
+SPARK_PIXELS = [
+    " # ",
+    "###",
+    " # ",
+]
+BOOM_PIXELS = [
+    "#  #  #",
+    " # # # ",
+    "  ###  ",
+    "## # ##",
+    "  ###  ",
+    " # # # ",
+    "#  #  #",
+]
+HIT_PIXELS = [
+    "#   #",
+    " # # ",
+    "  #  ",
+    " # # ",
+    "#   #",
+]
+BULLET_PIXELS = [
+    "###",
+    "###",
+]
+GHOST_PIXELS = [
+    " ### ",
+    "#####",
+    "## ##",
+    "#####",
+    "#####",
+    "# # #",
+]
+POOF_PIXELS = [
+    " ## ",
+    "####",
+    "####",
+    " ## ",
+]
 PARTICLE_PIXELS = {
     "heart": (HEART_PIXELS, HEART_COLOR),
     "star": (STAR_PIXELS, STAR_COLOR),
@@ -296,6 +352,13 @@ PARTICLE_PIXELS = {
     "question": (FONT_5x7["?"], QUESTION_COLOR),
     "note": (NOTE_PIXELS, NOTE_COLOR),
     "popcorn": (POPCORN_PIXELS, POPCORN_KERNEL),
+    "slash": (SLASH_PIXELS, SLASH_COLOR),
+    "spark": (SPARK_PIXELS, SPARK_COLOR),
+    "boom": (BOOM_PIXELS, BOOM_COLOR),
+    "hit": (HIT_PIXELS, HIT_COLOR),
+    "bullet": (BULLET_PIXELS, BULLET_COLOR),
+    "ghost": (GHOST_PIXELS, GHOST_COLOR),
+    "poof": (POOF_PIXELS, POOF_COLOR),
 }
 _PARTICLE_CACHE = {}
 
@@ -341,9 +404,28 @@ PISTOL_PIXELS = [
     " ==         ",
     "            ",
 ]
+# A long wooden shaft tipped with a steel leaf blade, pointing right.
+SPEAR_PIXELS = [
+    "==============#    ",
+    "==============##   ",
+    "==============#####",
+    "==============##   ",
+    "==============#    ",
+]
+# A stubby wooden handle with a heavy steel head on the business end (right).
+HAMMER_PIXELS = [
+    "        ####",
+    "        ####",
+    "========####",
+    "========####",
+    "        ####",
+    "        ####",
+]
 WEAPON_PIXELS = {
     "knife": (KNIFE_PIXELS, {"#": STEEL_COLOR, "=": HANDLE_COLOR}),
     "sword": (SWORD_PIXELS, {"#": STEEL_COLOR, "|": GUARD_COLOR, "=": HANDLE_COLOR}),
+    "spear": (SPEAR_PIXELS, {"#": STEEL_COLOR, "=": HANDLE_COLOR}),
+    "hammer": (HAMMER_PIXELS, {"#": HAMMER_HEAD_COLOR, "=": HANDLE_COLOR}),
     "pistol": (PISTOL_PIXELS, {"#": GUN_COLOR, "=": GUN_GRIP_COLOR}),
 }
 _WEAPON_CACHE = {}
@@ -366,6 +448,59 @@ def draw_weapon(kind):
         sprite = pygame.transform.scale(base, (w * WEAPON_SCALE, h * WEAPON_SCALE))
         _WEAPON_CACHE[kind] = sprite
     return sprite
+
+
+def weapon_pose(pet):
+    """Pose the pet's weapon for this frame, animating the swing.
+
+    Returns ``(surface, dx, dy)`` where ``dx``/``dy`` are offsets from the pet
+    sprite's top-left corner (the caller adds the on-screen pet position). The
+    pose is driven by ``pet.combat_phase`` (windup -> strike -> recovery) and the
+    progress through it, so blades rear back and swing through while a pistol
+    holds a steady aim and recoils on the shot.
+    """
+    kind = pet.weapon
+    base = draw_weapon(kind)
+    ranged = bool(WEAPON_PIXELS.get(kind) and kind == "pistol")
+    sign = 1 if pet.facing_right else -1
+
+    phase = getattr(pet, "combat_phase", None)
+    pmax = max(1, getattr(pet, "phase_max", 1))
+    prog = 1.0 - max(0, getattr(pet, "phase_timer", 0)) / pmax  # 0 -> 1 across phase
+
+    angle = -8.0   # relaxed ready pose, tip slightly down
+    reach = 0.0    # extra px forward from the hand
+    lift = 0.0     # px raised
+    if ranged:
+        if phase == "windup":
+            angle, reach = 0.0, 2.0          # level off and take aim
+        elif phase == "strike":
+            angle, reach = 6.0, -5.0 + 5.0 * prog  # muzzle flips up, recoils back
+        elif phase == "recovery":
+            angle = 6.0 * (1.0 - prog)
+    else:
+        if phase == "windup":
+            angle = -8.0 + 88.0 * prog       # rear up overhead
+            lift = 6.0 * prog
+        elif phase == "strike":
+            angle = 80.0 - 150.0 * prog      # whip down and through
+            reach = 10.0 * prog
+            lift = 6.0 * (1.0 - prog)
+        elif phase == "recovery":
+            angle = -70.0 + 62.0 * prog      # ease back to ready
+
+    img = base
+    if not pet.facing_right:
+        img = pygame.transform.flip(img, True, False)
+        angle = -angle
+    if abs(angle) > 0.5:
+        img = pygame.transform.rotate(img, angle)
+
+    hand_x = WINDOW_W * 0.5 + sign * (WINDOW_W * 0.30 + reach)
+    hand_y = WINDOW_H * 0.45 - lift
+    dx = hand_x - img.get_width() / 2
+    dy = hand_y - img.get_height() / 2
+    return img, dx, dy
 
 
 _BALL_SPRITE = None
@@ -492,8 +627,8 @@ def draw_pet_frame(pet):
         for cx in (7, 12):
             rect(small, cx - 1, eye_y - 1, 3, 3, EYE_WHITE)
             px(small, cx, eye_y, EYE_COLOR)
-    elif pet.loved and not pet.angry:
-        # Smitten: happy upward-arc eyes and rosy cheeks.
+    elif (pet.loved or getattr(pet, "victory", False)) and not pet.angry:
+        # Smitten / triumphant: happy upward-arc eyes and rosy cheeks.
         for ex in (left_eye_x, right_eye_x):
             px(small, ex - 1, eye_y + 1, EYE_COLOR)
             px(small, ex, eye_y, EYE_COLOR)
@@ -573,7 +708,7 @@ def draw_pet_frame(pet):
         px(small, 9, mouth_y + 1, EYE_COLOR)
         px(small, 10, mouth_y + 1, EYE_COLOR)
         px(small, 11, mouth_y + 1, EYE_COLOR)
-    elif pet.loved:
+    elif pet.loved or getattr(pet, "victory", False):
         # Upturned smile.
         px(small, 8, mouth_y, EYE_COLOR)
         px(small, 9, mouth_y + 1, EYE_COLOR)
@@ -614,12 +749,29 @@ def draw_pet_frame(pet):
 
     scaled = pygame.transform.scale(small, (WINDOW_W, WINDOW_H))
 
-    if (getattr(pet, "tumbling", False) or getattr(pet, "righting", False)) and abs(
-        getattr(pet, "angle", 0.0)
-    ) > 0.5:
-        # Spin while thrown. Rotation grows the surface, so re-center it in the
-        # fixed-size window (the corners clip slightly during a fast tumble).
-        rotated = pygame.transform.rotate(scaled, pet.angle)
+    # Babies start tiny and grow up. Shrink the sprite but keep the feet planted
+    # on the window's bottom edge so the little one still stands on the ground.
+    growth = getattr(pet, "growth", 1.0)
+    if growth < 1.0:
+        s = BABY_MIN_SCALE + (1.0 - BABY_MIN_SCALE) * max(0.0, min(1.0, growth))
+        sw = max(1, int(WINDOW_W * s))
+        sh = max(1, int(WINDOW_H * s))
+        small_scaled = pygame.transform.scale(scaled, (sw, sh))
+        scaled = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
+        scaled.fill(CLEAR)
+        scaled.blit(small_scaled, ((WINDOW_W - sw) // 2, WINDOW_H - sh))
+
+    # A thrown tumble, or a dramatic "fall" death, spins the sprite.
+    angle = getattr(pet, "angle", 0.0)
+    spinning = (
+        getattr(pet, "tumbling", False)
+        or getattr(pet, "righting", False)
+        or (getattr(pet, "dying", False) and getattr(pet, "death_kind", "") == "fall")
+    )
+    if spinning and abs(angle) > 0.5:
+        # Rotation grows the surface, so re-center it in the fixed-size window
+        # (the corners clip slightly during a fast tumble).
+        rotated = pygame.transform.rotate(scaled, angle)
         canvas = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
         canvas.fill(CLEAR)
         canvas.blit(
@@ -629,6 +781,12 @@ def draw_pet_frame(pet):
                 (WINDOW_H - rotated.get_height()) // 2,
             ),
         )
-        return canvas
+        scaled = canvas
+
+    # Fade out over the removal animation (works for any death style).
+    if getattr(pet, "dying", False):
+        dmax = max(1, getattr(pet, "death_max", 1))
+        alpha = max(0, min(255, int(255 * getattr(pet, "death_timer", 0) / dmax)))
+        scaled.fill((255, 255, 255, alpha), None, pygame.BLEND_RGBA_MULT)
 
     return scaled

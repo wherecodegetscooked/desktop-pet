@@ -310,10 +310,16 @@ class MacOverlay:
         self._add_menu_item(menu, "Rename", "n", self.menu_controller, b"renamePet:")
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
-            menu, "Breed (new pet)", "b", self.menu_controller, b"breed:"
+            menu, "Breed", "b", self.menu_controller, b"breed:"
+        )
+        self._add_menu_item(
+            menu, "New pet", "p", self.menu_controller, b"newPet:"
         )
         self._add_menu_item(
             menu, "Remove a pet", "r", self.menu_controller, b"removeDup:"
+        )
+        self._add_menu_item(
+            menu, "Remove all pets…", "", self.menu_controller, b"removeAll:"
         )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
@@ -394,7 +400,9 @@ class MacOverlay:
 
         for sel_name, action in (
             (b"breed:", "breed"),
+            (b"newPet:", "new_pet"),
             (b"removeDup:", "remove"),
+            (b"removeAll:", "remove_all"),
             (b"startFocus:", "focus_start"),
             (b"stopFocus:", "focus_stop"),
             (b"tossBall:", "ball"),
@@ -423,6 +431,18 @@ class MacOverlay:
     def close(self):
         """Hide this overlay's window (used when a bred pet is removed)."""
         _msg(self.objc, self.window, "orderOut:", None)
+
+    def set_mouse_ignore(self, ignore):
+        """Toggle click-through. Used to park the menu-owning window when it has
+        no pet to host, so it doesn't swallow clicks in empty space, then make it
+        interactive again when reused for a new pet."""
+        _msg(
+            self.objc,
+            self.window,
+            "setIgnoresMouseEvents:",
+            bool(ignore),
+            argtypes=[ctypes.c_bool],
+        )
 
     def should_quit(self):
         window_visible = _msg(self.objc, self.window, "isVisible", restype=ctypes.c_bool)
