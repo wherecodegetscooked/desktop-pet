@@ -240,6 +240,26 @@ JOY_FLY_THRUST = 0.35               # Upward thrust per frame while rising.
 JOY_FLY_RISE_CAP = 4.0              # Cap on climb speed so the hop isn't a rocket.
 JOY_FLY_DESCEND_SPEED = 2.6         # Gentle, capped speed of the powered descent.
 
+# Conjured cloud platforms --------------------------------------------------
+# When a maximised window leaves a pet stuck on the floor with nowhere to hop
+# to, it can now and then conjure a little floating cloud mid-screen, leap onto
+# it, and the cloud puffs away after a few seconds. Purely self-contained — no
+# accessibility/content inspection needed.
+AIR_PLATFORM_ENABLE = True
+MAX_AIR_PLATFORMS = 2                # Hard cap on clouds on screen at once.
+AIR_PLATFORM_LIFE = 460             # Frames a cloud lasts (~7.5s).
+AIR_PLATFORM_FADE = 70              # Frames of fade-out at the end.
+AIR_PLATFORM_COOLDOWN = 600         # Min frames between conjurings (~10s).
+AIR_PLATFORM_CHANCE = 0.012         # Per-frame chance a stuck pet conjures one.
+AIR_PLATFORM_W = 96                 # Cloud width in screen px (also its ledge span).
+AIR_PLATFORM_H = 28                 # Cloud height in screen px.
+AIR_PLATFORM_RISE_MIN = 150         # Min height above the pet's feet to place it.
+AIR_PLATFORM_RISE_MAX = 300         # Max height above the pet's feet to place it.
+CLOUD_NAME = "Cloud"                # Platform name (must differ from the ground).
+CLOUD_COLOR = (248, 250, 255, 255)  # Puffy cloud body.
+CLOUD_SHADE = (206, 218, 240, 255)  # Cloud underside shade.
+CLOUD_HI = (255, 255, 255, 255)     # Cloud top highlight.
+
 # Capturing the cursor: after landing hits_to_win clean blows he pounces, pins
 # the pointer for a beat (celebrating), then flings it across the screen and
 # does a little victory dance before calming down.

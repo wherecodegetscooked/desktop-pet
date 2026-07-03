@@ -76,6 +76,11 @@ from config import (
     BOW_WOOD_COLOR,
     BOW_WOOD_SHADE,
     BOW_STRING_COLOR,
+    AIR_PLATFORM_W,
+    AIR_PLATFORM_H,
+    CLOUD_COLOR,
+    CLOUD_SHADE,
+    CLOUD_HI,
     WEAPON_SCALE,
     WINDOW_H,
     WINDOW_W,
@@ -685,6 +690,42 @@ def draw_ball():
         ((BALL_WIN - sprite.get_width()) // 2, (BALL_WIN - sprite.get_height()) // 2),
     )
     return canvas
+
+
+_CLOUD_SPRITE = None
+
+
+def draw_air_platform(alpha=255):
+    """A puffy little cloud whose flat top is the standing surface (top edge of
+    the returned surface aligns with the platform's y). Cached at full opacity;
+    a copy is faded for the despawn animation."""
+    global _CLOUD_SPRITE
+    if _CLOUD_SPRITE is None:
+        w, h = AIR_PLATFORM_W, AIR_PLATFORM_H
+        base = pygame.Surface((w, h), pygame.SRCALPHA)
+        base.fill(CLEAR)
+        # A flat-topped slab gives the standing surface along the very top...
+        top = 4
+        pygame.draw.rect(base, CLOUD_COLOR, (8, top, w - 16, h - top - 6))
+        # ...and fat round lobes bulge out below and to the sides for the puffy
+        # cloud silhouette (their tops meet the flat standing line).
+        big = (h - top) // 2 + 3
+        lobe_y = top + big - 4
+        for i, cx in enumerate((14, 34, 54, 74)):
+            r = big if i in (1, 2) else big - 2
+            pygame.draw.circle(base, CLOUD_COLOR, (cx, lobe_y), r)
+        pygame.draw.circle(base, CLOUD_COLOR, (w - 10, lobe_y - 1), big - 4)
+        pygame.draw.circle(base, CLOUD_COLOR, (8, lobe_y - 1), big - 4)
+        # Bright rim along the flat top, soft shade tucked under the lobes.
+        pygame.draw.rect(base, CLOUD_HI, (10, top, w - 20, 2))
+        for cx in (24, 44, 64):
+            pygame.draw.circle(base, CLOUD_SHADE, (cx, h - 4), 3)
+        _CLOUD_SPRITE = base
+    if alpha >= 255:
+        return _CLOUD_SPRITE
+    faded = _CLOUD_SPRITE.copy()
+    faded.set_alpha(alpha)
+    return faded
 
 
 def _draw_headphones(small, body_y):
