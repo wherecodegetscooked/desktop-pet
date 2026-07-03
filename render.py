@@ -80,7 +80,7 @@ from config import (
     AIR_PLATFORM_H,
     CLOUD_COLOR,
     CLOUD_SHADE,
-    CLOUD_HI,
+    CLOUD_OUTLINE,
     WEAPON_SCALE,
     WINDOW_H,
     WINDOW_W,
@@ -696,31 +696,41 @@ _CLOUD_SPRITE = None
 
 
 def draw_air_platform(alpha=255):
-    """A puffy little cloud whose flat top is the standing surface (top edge of
-    the returned surface aligns with the platform's y). Cached at full opacity;
-    a copy is faded for the despawn animation."""
+    """A chunky pixel-art cloud: soft-white body, light-grey shading, and a dark
+    1px (scaled) outline — drawn low-res and scaled up for the retro look. The
+    caller shifts it up by CLOUD_SURFACE_Y so the pet stands nestled on its top.
+    Cached at full opacity; a copy is faded for the spawn/despawn animation."""
     global _CLOUD_SPRITE
     if _CLOUD_SPRITE is None:
-        w, h = AIR_PLATFORM_W, AIR_PLATFORM_H
-        base = pygame.Surface((w, h), pygame.SRCALPHA)
-        base.fill(CLEAR)
-        # A flat-topped slab gives the standing surface along the very top...
-        top = 4
-        pygame.draw.rect(base, CLOUD_COLOR, (8, top, w - 16, h - top - 6))
-        # ...and fat round lobes bulge out below and to the sides for the puffy
-        # cloud silhouette (their tops meet the flat standing line).
-        big = (h - top) // 2 + 3
-        lobe_y = top + big - 4
-        for i, cx in enumerate((14, 34, 54, 74)):
-            r = big if i in (1, 2) else big - 2
-            pygame.draw.circle(base, CLOUD_COLOR, (cx, lobe_y), r)
-        pygame.draw.circle(base, CLOUD_COLOR, (w - 10, lobe_y - 1), big - 4)
-        pygame.draw.circle(base, CLOUD_COLOR, (8, lobe_y - 1), big - 4)
-        # Bright rim along the flat top, soft shade tucked under the lobes.
-        pygame.draw.rect(base, CLOUD_HI, (10, top, w - 20, 2))
-        for cx in (24, 44, 64):
-            pygame.draw.circle(base, CLOUD_SHADE, (cx, h - 4), 3)
-        _CLOUD_SPRITE = base
+        scale = 3
+        bw, bh = AIR_PLATFORM_W // scale, AIR_PLATFORM_H // scale  # 34 x 18
+        body = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        body.fill(CLEAR)
+        # Puffy top from overlapping round lobes of different sizes so the top
+        # edge undulates into distinct bumps (rather than one smooth dome), over
+        # a flat-bottomed body.
+        lobes = [(7, 11, 4), (12, 8, 5), (19, 6, 7), (26, 9, 6), (30, 12, 3)]
+        for cx, cy, r in lobes:
+            pygame.draw.circle(body, CLOUD_COLOR, (cx, cy), r)
+        pygame.draw.rect(body, CLOUD_COLOR, (4, 10, bw - 8, bh - 10 - 2))
+        # Light-grey shading: a soft shadow under the belly and beneath the big
+        # bump to give the cloud a little form.
+        pygame.draw.rect(body, CLOUD_SHADE, (6, bh - 5, bw - 12, 2))
+        for cx, cy, r in ((17, 11, 3), (25, 12, 2)):
+            pygame.draw.circle(body, CLOUD_SHADE, (cx, cy), r)
+        # Dark outline: stamp the silhouette in the outline colour, nudged in
+        # every direction, behind the body.
+        mask = pygame.mask.from_surface(body)
+        silhouette = mask.to_surface(setcolor=CLOUD_OUTLINE, unsetcolor=(0, 0, 0, 0))
+        outlined = pygame.Surface((bw, bh), pygame.SRCALPHA)
+        outlined.fill(CLEAR)
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1),
+                       (-1, -1), (1, -1), (-1, 1), (1, 1)):
+            outlined.blit(silhouette, (dx, dy))
+        outlined.blit(body, (0, 0))
+        _CLOUD_SPRITE = pygame.transform.scale(
+            outlined, (bw * scale, bh * scale)
+        )
     if alpha >= 255:
         return _CLOUD_SPRITE
     faded = _CLOUD_SPRITE.copy()

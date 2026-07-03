@@ -251,14 +251,20 @@ AIR_PLATFORM_LIFE = 460             # Frames a cloud lasts (~7.5s).
 AIR_PLATFORM_FADE = 70              # Frames of fade-out at the end.
 AIR_PLATFORM_COOLDOWN = 600         # Min frames between conjurings (~10s).
 AIR_PLATFORM_CHANCE = 0.012         # Per-frame chance a stuck pet conjures one.
-AIR_PLATFORM_W = 96                 # Cloud width in screen px (also its ledge span).
-AIR_PLATFORM_H = 28                 # Cloud height in screen px.
-AIR_PLATFORM_RISE_MIN = 150         # Min height above the pet's feet to place it.
-AIR_PLATFORM_RISE_MAX = 300         # Max height above the pet's feet to place it.
+AIR_PLATFORM_W = 102                # Cloud sprite width in screen px.
+AIR_PLATFORM_H = 54                 # Cloud sprite height in screen px.
+# Where along the cloud sprite the pet's feet rest (screen px from the sprite
+# top). The overlay is drawn shifted up by this so the pet stands ON the cloud
+# with its puffy top peeking up around its feet, not floating above a slab.
+CLOUD_SURFACE_Y = 16
+# Vertical band of the pet's display to drop the cloud into (fraction from the
+# top). Keeps it around the middle of the screen rather than at an edge.
+AIR_PLATFORM_BAND_MIN = 0.42
+AIR_PLATFORM_BAND_MAX = 0.56
 CLOUD_NAME = "Cloud"                # Platform name (must differ from the ground).
-CLOUD_COLOR = (248, 250, 255, 255)  # Puffy cloud body.
-CLOUD_SHADE = (206, 218, 240, 255)  # Cloud underside shade.
-CLOUD_HI = (255, 255, 255, 255)     # Cloud top highlight.
+CLOUD_COLOR = (250, 251, 253, 255)  # Cloud body (soft white).
+CLOUD_SHADE = (205, 213, 227, 255)  # Cloud shading (light grey).
+CLOUD_OUTLINE = (46, 48, 58, 255)   # Dark pixel outline.
 
 # Capturing the cursor: after landing hits_to_win clean blows he pounces, pins
 # the pointer for a beat (celebrating), then flings it across the screen and
