@@ -1991,6 +1991,13 @@ class Pet:
             self.x += self.vx
             if self.platform and self._feet_inside_platform(self.platform):
                 self.y = self.platform["y"] - WINDOW_H
+            elif self.y + WINDOW_H >= self.max_y - 1:
+                # No platform under him but he's on the screen floor: rest here
+                # instead of flip-flopping between airborne and grounded (which
+                # jittered him up and down, half through the bottom edge).
+                self.y = self.max_y - WINDOW_H
+                if self.state == State.JUMP:
+                    self.pick_state()
             else:
                 self.airborne = True
                 self.state = State.JUMP
@@ -2061,6 +2068,14 @@ class Pet:
         if current and self._feet_inside_platform(current):
             self.platform = current
             self.y = current["y"] - WINDOW_H
+            return
+
+        # His platform vanished. If he's sitting on the bare screen floor, let him
+        # rest there rather than forcing him airborne every rescan (which caused a
+        # periodic jitter where there's no ground platform under him).
+        if self.y + WINDOW_H >= self.max_y - 1:
+            self.y = self.max_y - WINDOW_H
+            self.platform = None
             return
 
         self.platform = None
@@ -2263,7 +2278,11 @@ class Pet:
         ]
         if grounds:
             return min(grounds, key=lambda item: item["y"])
-        return platforms[0] if platforms else None
+        # No ground under his feet (e.g. an inter-display gap). Return None rather
+        # than a bogus far-away platform — callers rest him on the screen floor
+        # instead, which avoids the airborne/grounded flip-flop that jittered a
+        # landing pet half through the bottom edge.
+        return None
 
     def _feet_x(self):
         return self.x + WINDOW_W * 0.5

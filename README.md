@@ -105,6 +105,33 @@ tag) builds the app in GitHub Actions and updates a rolling `latest` release,
 which is what "Check for updates" reads. (The build number is just the Actions
 run number, baked into the bundle as `VERSION`.)
 
+#### Signing (so permissions survive updates)
+macOS ties a granted permission (like **Screen Recording**, which the app uses to
+read window titles) to the app's code signature. PyInstaller ad-hoc signs the
+app, and an ad-hoc signature is derived from the binary hash — so it **changes on
+every build**. Because the updater swaps the bundle in place, macOS sees each
+update as a "new" app and **re-prompts** for the permission every time.
+
+Fix: build with a **stable** signing identity. A free self-signed certificate is
+enough for permission persistence (a paid Developer ID additionally allows
+notarization). One-time setup:
+
+1. Keychain Access → *Certificate Assistant → Create a Certificate…* → name it
+   e.g. `Desktop Pet Signing`, type **Code Signing**, self-signed.
+2. Confirm it's usable: `security find-identity -v -p codesigning`.
+3. Build signed:
+
+   ```bash
+   SIGN_IDENTITY="Desktop Pet Signing" ./build_macos_release.sh
+   ```
+
+The build pins `--identifier com.nicolaswolf.desktoppet`, so every build signed
+with the same certificate shares one designated requirement and macOS keeps the
+grant across updates. (The very first update onto a signed build re-prompts once,
+then it sticks.) To make the *published* GitHub Actions builds persist too, the
+same certificate has to be imported into the CI keychain and `SIGN_IDENTITY` set
+there — otherwise CI falls back to ad-hoc.
+
 ### Developer / power-user install (run from source)
 If you'd rather skip packaging, a source clone updates with a plain `git pull`.
 `setup.sh` installs an autostarting menu-bar app whose **"Check for updates…"**

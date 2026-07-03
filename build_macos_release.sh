@@ -44,6 +44,32 @@ fi
 
 pyinstaller "${pyinstaller_args[@]}" "$PROJECT_DIR/main.py"
 
+# Code signing ---------------------------------------------------------------
+# PyInstaller ad-hoc signs the app, and an ad-hoc signature is derived from the
+# binary hash — so it CHANGES on every build. macOS keys granted permissions
+# (Screen Recording, used to read window titles) to the app's signature, so with
+# ad-hoc signing it forgets the grant after every in-place update and re-prompts.
+#
+# Signing with a STABLE identity fixes this: set SIGN_IDENTITY to a code-signing
+# identity (run `security find-identity -v -p codesigning` to list them). A free
+# self-signed certificate works fine for permission persistence; a Developer ID
+# additionally lets you notarize. The pinned --identifier keeps the designated
+# requirement stable across builds. See README ("Signing") for creating a cert.
+SIGN_IDENTITY="${SIGN_IDENTITY:-}"
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  echo "Codesigning with identity: $SIGN_IDENTITY"
+  codesign --force --deep --identifier "$BUNDLE_ID" \
+    --sign "$SIGN_IDENTITY" "$APP_PATH"
+  codesign --verify --deep --strict "$APP_PATH"
+  echo "Signed. Designated requirement:"
+  codesign -d -r- "$APP_PATH" 2>&1 | sed -n 's/^designated => //p'
+else
+  echo "WARNING: SIGN_IDENTITY not set. The app is ad-hoc signed, so macOS will"
+  echo "         re-prompt for Screen Recording (and other permissions) after"
+  echo "         every update. Set SIGN_IDENTITY to a stable code-signing"
+  echo "         identity to keep permissions across updates (see README)."
+fi
+
 STAGING_DIR="$RELEASE_DIR/dmg-staging"
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR"
