@@ -84,12 +84,32 @@ from config import (
     COURT_REACH,
     COURT_HEART_CHANCE,
     COURT_PHRASES,
-    BABY_GROW_RATE,
+    BABY_GROW_DELAY,
+    BABY_GROW_FRAMES,
     BABY_NAME_SUFFIX,
     BABY_PHRASES,
+    BABY_FLEE_SPEED,
+    BABY_FLEE_DURATION,
     DEATH_FRAMES,
     DEATH_KINDS,
     WEAPON_STATS,
+    RANGED_WEAPONS,
+    FLY_TRIGGER_HEIGHT,
+    FLY_THRUST,
+    FLY_MAX_SPEED,
+    FLY_LIFTOFF_VY,
+    FLY_DURATION,
+    FLY_COOLDOWN,
+    FLY_HOVER_RANGE,
+    FLY_FLAME_CHANCE,
+    REACH_FAILS_TO_RANGED,
+    RAGE_MIN_DURATION,
+    RAGE_MAX_DURATION,
+    RAGE_HITS_TO_CALM,
+    FX_SPARK_COUNT,
+    FX_SMASH_SPARK_COUNT,
+    FX_DUST_COUNT,
+    FX_TRAIL_COUNT,
     RANDOM_JUMP_STATE_CHANCE,
     RIGHT_DAMPING,
     RIGHT_SETTLE,
@@ -182,6 +202,17 @@ class Pet:
         self.hits_landed = 0
         self._aim = None             # cursor pos committed to at swing start
         self.attack_landed = False
+        self.rage_age = 0            # frames since this rage began (calm gating).
+        # Mobility brain: when the cursor floats out of walking reach a melee
+        # fighter fires a little jetpack and flies at it; repeated fruitless
+        # flights make him adapt and pull a ranged weapon instead.
+        self.flying = False
+        self.fly_timer = 0
+        self.fly_cooldown = 0
+        self.fly_vx = 0.0
+        self.fly_vy = 0.0
+        self._hits_at_launch = 0
+        self.reach_fails = 0
         # Cursor capture. The finale pins the pointer (cursor_lock: the main loop
         # warps to this every frame until released), then flings it once
         # (cursor_grab: one-shot warp target). Individual hits also knock the
@@ -245,6 +276,12 @@ class Pet:
         # pets waddle toward a meeting point trading hearts.
         self.baby = False
         self.growth = 1.0
+        self.baby_age = 0            # frames lived as a baby (drives the slow grow-up).
+        # Baby defence: a scared baby flags this so nearby adults come to help,
+        # and remembers where the threat was so the adults face the right way.
+        self.needs_defense = 0       # frames left broadcasting "protect me!".
+        self.threat_pos = None       # last cursor pos that scared this baby.
+        self.fleeing = False
         self.courting = False
         self.court_target_x = 0.0
         self.court_timer = 0
@@ -578,7 +615,13 @@ class Pet:
     def on_click(self, clicks, mouse=None):
         """React to taps. Clicks are hostile: a couple are tolerated (hearts),
         but poking too often angers him and eventually tips him into violence.
-        Clicking also drains any affection he was building up."""
+        Clicking also drains any affection he was building up.
+
+        Babies can't fight: any poke scares them into fleeing and calls for the
+        adults instead of arming up."""
+        if self.baby:
+            self._baby_flee(mouse)
+            return
         for _ in range(clicks):
             if self.rage or self.angry:
                 self.spawn_particles("anger", random.randint(2, 3))
@@ -591,6 +634,38 @@ class Pet:
         if not self.rage and self.anger >= RAGE_THRESHOLD:
             self._become_rage()
         elif not self.angry and self.anger >= ANGRY_THRESHOLD:
+            self._become_angry()
+
+    def _baby_flee(self, mouse=None):
+        """A poked baby panics: it squeaks, sheds its calm, sprints away from the
+        threat, and broadcasts 'protect me!' so nearby adults come running."""
+        self.scared = True
+        self.fleeing = True
+        self.scared_timer = BABY_FLEE_DURATION
+        self.needs_defense = BABY_FLEE_DURATION
+        self.threat_pos = tuple(mouse) if mouse else None
+        # Bail out of anything gentle it was doing.
+        self.following = False
+        self.socializing = False
+        self.curious = False
+        self.anger = 0.0
+        self.angry = False
+        self.spawn_particles("sweat", 3)
+        self.start_talk(random.choice(SCARED_PHRASES))
+
+    def provoke_to_fight(self, anger_amount, threat_pos=None):
+        """A nearby ally (or a threatened baby) drags this adult into the fight.
+        Seeds anger; if it crosses the rage line the pet arms up and charges the
+        threat. No-op for babies, or pets already busy raging/dying/scared."""
+        if self.baby or self.dying or self.rage or self.scared:
+            return
+        if threat_pos is not None:
+            # Face and aim at the reported threat so the whole group converges.
+            self._aim = tuple(threat_pos)
+        self.anger += anger_amount
+        if self.anger >= RAGE_THRESHOLD:
+            self._become_rage()
+        elif self.anger >= ANGRY_THRESHOLD and not self.angry:
             self._become_angry()
 
     def _become_angry(self):
@@ -607,6 +682,8 @@ class Pet:
         self.angry = True
         self.angry_timer = ANGRY_DURATION
         self.rage_timer = RAGE_DURATION
+        self.rage_age = 0
+        self.reach_fails = 0
         self.weapon = self.weapon_pref or random.choice(WEAPONS)
         self._reset_combat()
         self.following = False
@@ -631,6 +708,9 @@ class Pet:
         self.hits_landed = 0
         self._aim = None
         self.attack_landed = False
+        self.flying = False
+        self.fly_timer = 0
+        self.fly_cooldown = 0
 
     def _weapon_stats(self):
         return WEAPON_STATS.get(self.weapon or "knife", WEAPON_STATS["knife"])
@@ -686,13 +766,18 @@ class Pet:
         self.love = max(0.0, self.love - LOVE_DECAY)
         if self.rage:
             self.rage_timer -= 1
-            if (
+            self.rage_age += 1
+            # He commits to the fight: won't calm on the timer alone. He needs to
+            # have actually landed some blows (or the base timer runs out AND he's
+            # past the minimum), unless the hard ceiling forces him to give up.
+            busy = self.capturing or self.lock_timer > 0 or self.combat_phase or self.flying
+            fought_enough = (
                 self.rage_timer <= 0
-                and self.anger < 1.0
-                and not self.capturing
-                and self.lock_timer <= 0
-                and not self.combat_phase
-            ):
+                and self.rage_age >= RAGE_MIN_DURATION
+                and self.hits_landed >= RAGE_HITS_TO_CALM
+            )
+            timed_out = self.rage_age >= RAGE_MAX_DURATION
+            if (fought_enough or timed_out) and not busy:
                 self.rage = False
                 self.weapon = None
                 self._reset_combat()
@@ -709,6 +794,9 @@ class Pet:
             self.scared_timer -= 1
             if self.scared_timer <= 0:
                 self.scared = False
+                self.fleeing = False
+        if self.needs_defense > 0:
+            self.needs_defense -= 1
         if self.curious:
             self.curious_timer -= 1
             if self.curious_timer <= 0:
@@ -775,7 +863,24 @@ class Pet:
             self.spawn_particles("question", 1)
 
     def _update_scared(self, mouse):
-        """Shiver in place and shy away from the cursor."""
+        """Shiver in place and shy away from the cursor. A fleeing baby doesn't
+        just tremble — it sprints away from whatever scared it and squeaks for
+        help while nearby adults come to the rescue."""
+        if self.fleeing:
+            threat = self.threat_pos or mouse
+            if threat is not None:
+                # Run directly away from the threat; turn at walls.
+                away = -1 if threat[0] >= self._feet_x() else 1
+                self.vx = away * BABY_FLEE_SPEED
+                self.facing_right = away > 0
+                self.threat_pos = threat
+            else:
+                self.vx = random.uniform(-BABY_FLEE_SPEED, BABY_FLEE_SPEED)
+            self.state = State.RUN
+            self.state_timer = 20
+            if random.random() < 0.12:
+                self.spawn_particles("sweat", 1)
+            return
         self.state = State.IDLE
         self.vx = random.uniform(-SCARED_TREMBLE, SCARED_TREMBLE)
         if mouse is not None:
@@ -824,12 +929,26 @@ class Pet:
     # -- Combat ------------------------------------------------------------
 
     def _update_combat(self, mouse, platforms):
-        """Run the combat brain while enraged: close to weapon range, then run
-        the windup -> strike -> recovery timeline. Each weapon has its own reach,
-        timing, lunge, and effect (see WEAPON_STATS). After enough clean hits he
-        pounces and captures the cursor. Respects gravity and platforms — he
-        never flies straight at it."""
+        """Run the combat brain while enraged. The key question every frame is
+        'can I actually reach the cursor?':
+
+          * cursor within walking + small-hop reach -> close in and swing/shoot;
+          * cursor floating too high for a melee weapon -> fire up the jetpack and
+            fly at it (rather than hopping uselessly toward the top of the screen);
+          * repeated fruitless flights -> adapt and pull a ranged weapon so he can
+            just shoot it out of the air.
+
+        Ranged weapons stay grounded and line up a shot. Each attack still runs the
+        windup -> strike -> recovery timeline; after enough clean hits he captures
+        the cursor."""
         stats = self._weapon_stats()
+
+        # Already in the air on the jetpack: hand off to the flight brain.
+        if self.flying:
+            self._update_flight(mouse, stats, platforms)
+            return
+
+        self.fly_cooldown = max(0, self.fly_cooldown - 1)
 
         # Mid-swing: finish the committed attack regardless of cursor movement.
         # Fall back to the aim point if the cursor reading is momentarily gone.
@@ -855,36 +974,178 @@ class Pet:
         if not grounded:
             return  # let the current jump arc finish
 
-        # Otherwise position for the weapon: close the horizontal gap to roughly
-        # the weapon's preferred standoff, climbing or dropping to match height.
         feet_y = self.y + WINDOW_H
         dx = mouse[0] - self._feet_x()
-        dy = mouse[1] - feet_y
+        height_above = feet_y - mouse[1]   # >0: cursor is above his feet
 
+        # Drop off a ledge if the cursor is well below him.
         on_ledge = (
             self.platform is not None
             and self.platform["name"] != GROUND_PLATFORM_NAME
         )
-        if dy > 50 and on_ledge and self.jump_cooldown == 0:
+        if -height_above > 50 and on_ledge and self.jump_cooldown == 0:
             self.drop()
             return
 
+        # Can he reach it standing? Yes if it isn't perched out of walking reach:
+        # a ranged weapon reaches as long as the radial distance fits its range
+        # from directly underneath; a melee weapon only if it's not too high up.
+        if stats["ranged"]:
+            reachable = height_above <= stats["range"]
+        else:
+            reachable = height_above <= FLY_TRIGGER_HEIGHT
+
+        if not reachable:
+            self._handle_unreachable(mouse, stats, height_above)
+            return
+
+        self.reach_fails = 0
+        # Reachable: close the horizontal gap to the weapon's standoff, then hold
+        # and brace once inside it (the range check above fires the swing).
         if abs(dx) > stats["approach"]:
             self.vx = (1 if dx > 0 else -1) * RAGE_CHASE_SPEED
             self.state = State.RUN
             self.facing_right = dx > 0
         else:
-            # Within standoff but not yet in striking range (e.g. cursor above):
-            # hold, face the target, and brace for the next swing.
             self.vx = 0.0
             self.state = State.IDLE
             self.facing_right = mouse[0] >= center_x
             if random.random() < 0.08:
                 self.spawn_particles("anger", 1)
         self.state_timer = 30
-        # Climb toward the cursor when it's above him, hopping window to window.
-        if mouse[1] < feet_y - 40:
-            self._rage_jump(mouse, platforms)
+
+    def _handle_unreachable(self, mouse, stats, height_above):
+        """The cursor is floating somewhere he can't get to on foot. Decide how to
+        close the gap: fly at it with a melee weapon, or — if flying keeps failing
+        — switch to a ranged weapon and shoot instead. First, walk underneath so
+        whatever he does next starts from directly below the target."""
+        dx = mouse[0] - self._feet_x()
+        center_x = self.x + WINDOW_W / 2
+        if abs(dx) > 24:
+            # Line up horizontally under the cursor before committing.
+            self.vx = (1 if dx > 0 else -1) * RAGE_CHASE_SPEED
+            self.state = State.RUN
+            self.facing_right = dx > 0
+            self.state_timer = 30
+            return
+
+        self.vx = 0.0
+        self.state = State.IDLE
+        self.facing_right = mouse[0] >= center_x
+
+        # Adapted already? A ranged weapon just needs a clear shot; if the cursor
+        # is even beyond ranged reach, a quick hop-fly lifts him into range.
+        if stats["ranged"]:
+            if height_above > stats["range"] and self.fly_cooldown == 0:
+                self._start_flight(mouse)
+            return
+
+        # Melee weapon and the target's out of reach. Prefer the fun option — fly
+        # at it — but if flights keep coming up empty, pull a ranged weapon.
+        if self.reach_fails >= REACH_FAILS_TO_RANGED:
+            self.weapon = random.choice(RANGED_WEAPONS)
+            self.reach_fails = 0
+            self.attack_cooldown = 8
+            self.spawn_particles("anger", 2)
+            self.start_talk(random.choice(RAGE_AIM_PHRASES))
+            return
+        if self.fly_cooldown == 0:
+            self._start_flight(mouse)
+
+    # -- Flight (jetpack mobility) -----------------------------------------
+
+    def _start_flight(self, mouse):
+        """Fire up the jetpack: kick off the ground and start thrusting toward the
+        cursor. Fuel is limited (FLY_DURATION); running dry drops him back down."""
+        self.flying = True
+        self.fly_timer = FLY_DURATION
+        self.fly_vx = self.vx
+        self.fly_vy = FLY_LIFTOFF_VY
+        self.airborne = True
+        self.state = State.JUMP
+        self.jump_vy = 0.0
+        self._hits_at_launch = self.hits_landed
+        self._aim = (mouse[0], mouse[1]) if mouse else self._aim
+        self.spawn_particles("dust", 3)
+        self.spawn_particles("flame", 2)
+        if random.random() < 0.5:
+            self.start_talk(random.choice(RAGE_PHRASES))
+
+    def _update_flight(self, mouse, stats, platforms):
+        """Steer the jetpack toward the cursor and attack once in range. Bypasses
+        gravity — update() skips its own physics while self.flying is set."""
+        self.fly_timer -= 1
+
+        # Mid-swing in the air: run the attack timeline, hovering roughly in place.
+        if self.combat_phase:
+            self.fly_vx *= 0.8
+            self.fly_vy *= 0.8
+            self.x += self.fly_vx
+            self.y += self.fly_vy
+            self._advance_attack(mouse if mouse is not None else self._aim, stats)
+            self._clamp_position()
+            return
+
+        aim = mouse if mouse is not None else self._aim
+        if aim is None:
+            self._end_flight()
+            return
+
+        center_x = self.x + WINDOW_W / 2
+        center_y = self.y + WINDOW_H / 2
+        dx = aim[0] - center_x
+        dy = aim[1] - center_y
+        dist = math.hypot(dx, dy)
+
+        # Close enough to strike from the air.
+        if dist <= stats["range"] * FLY_HOVER_RANGE and self.attack_cooldown == 0:
+            self.facing_right = dx >= 0
+            self._start_attack(aim, stats)
+            return
+
+        # Thrust toward the cursor, capped so he arcs in rather than teleporting.
+        if dist > 1:
+            self.fly_vx += (dx / dist) * FLY_THRUST
+            self.fly_vy += (dy / dist) * FLY_THRUST
+        speed = math.hypot(self.fly_vx, self.fly_vy)
+        if speed > FLY_MAX_SPEED:
+            self.fly_vx *= FLY_MAX_SPEED / speed
+            self.fly_vy *= FLY_MAX_SPEED / speed
+        self.x += self.fly_vx
+        self.y += self.fly_vy
+        self.facing_right = dx >= 0
+        self.state = State.JUMP
+
+        # Jetpack exhaust puffing out below him.
+        if random.random() < FLY_FLAME_CHANCE:
+            self._add_particle(
+                "flame", center_x, self.y + WINDOW_H,
+                random.uniform(-0.6, 0.6), random.uniform(0.6, 1.8),
+                random.randint(6, 12), grav=0.02,
+            )
+
+        self._clamp_position()
+        if self.fly_timer <= 0:
+            self._end_flight()
+
+    def _clamp_position(self):
+        """Keep a flying pet inside the screen bounds."""
+        self.x = max(self.min_x, min(self.max_x - WINDOW_W, self.x))
+        self.y = max(self.min_y, min(self.max_y - WINDOW_H, self.y))
+
+    def _end_flight(self):
+        """Cut the engine and drop back into normal gravity. If the flight landed
+        no new hits, count it a failure so he eventually adapts to a ranged
+        weapon."""
+        if self.hits_landed <= self._hits_at_launch:
+            self.reach_fails += 1
+        self.flying = False
+        self.fly_cooldown = FLY_COOLDOWN
+        self.airborne = True
+        self.state = State.JUMP
+        self.jump_vy = max(0.0, self.fly_vy)
+        self.vx = self.fly_vx * 0.5
+        self.spawn_particles("dust", 2)
 
     def _start_attack(self, mouse, stats):
         """Commit to a swing: lock the aim, face the target, begin the windup."""
@@ -931,12 +1192,23 @@ class Pet:
         center_x = self.x + WINDOW_W / 2
         center_y = self.y + WINDOW_H / 2
 
-        # Dash in (blades lunge a lot, pistol not at all). Horizontal only so he
-        # stays grounded.
+        # Dash in (blades lunge a lot, ranged weapons not at all). Horizontal only
+        # so he stays grounded, trailing a streak of motion behind the lunge.
         lunge = stats.get("lunge", 0)
         if lunge:
+            start_x = center_x
             self.x = max(self.min_x, min(self.max_x - WINDOW_W, self.x + sign * lunge))
             self._spawn_dust()
+            center_x = self.x + WINDOW_W / 2
+            for i in range(FX_TRAIL_COUNT):
+                t = i / max(1, FX_TRAIL_COUNT)
+                self._add_particle(
+                    "trail", start_x + (center_x - start_x) * t, center_y,
+                    -sign * 0.5, 0.0, 6 + i, grav=0.0,
+                )
+        elif stats["ranged"]:
+            # A little recoil kick backward on a shot.
+            self.x = max(self.min_x, min(self.max_x - WINDOW_W, self.x - sign * 3))
             center_x = self.x + WINDOW_W / 2
 
         aim = mouse if mouse is not None else self._aim
@@ -966,18 +1238,35 @@ class Pet:
             self._add_particle("dust", tip_x, tip_y + 4, sign * 0.6, -0.2, 12)
 
     def _fire_projectile(self, center_x, center_y, sign, aim):
-        """Pistol shot: a muzzle flash and a bullet streaking toward the aim."""
+        """Ranged shot: a muzzle/bowstring flash plus a projectile (bullet or
+        arrow) streaking toward the aim, leaving a little trail behind it."""
         mux = center_x + sign * WINDOW_W * 0.42
         muy = center_y
-        self._add_particle("spark", mux, muy, sign * 1.6, 0.0, 6, grav=0.0)
         bdx = aim[0] - mux
         bdy = aim[1] - muy
         bdist = max(1.0, math.hypot(bdx, bdy))
-        speed = 16.0
+        arrow = self.weapon == "bow"
+        # Muzzle flash / bowstring twang.
+        self._add_particle("muzzle", mux, muy, sign * 0.4, 0.0, 5, grav=0.0)
+        for _ in range(3):
+            self._add_particle(
+                "spark", mux, muy, sign * random.uniform(0.5, 2.2),
+                random.uniform(-1.4, 1.4), random.randint(4, 9), grav=0.06,
+            )
+        speed = 14.0 if arrow else 18.0
+        life = int(bdist / speed) + 2
+        kind = "arrow" if arrow else "bullet"
+        flip = bdx < 0
         self._add_particle(
-            "bullet", mux, muy, bdx / bdist * speed, bdy / bdist * speed,
-            int(bdist / speed) + 2, grav=0.0,
+            kind, mux, muy, bdx / bdist * speed, bdy / bdist * speed,
+            life, grav=0.0, flip=flip,
         )
+        # A couple of trailing streaks so the shot reads as fast.
+        for i in range(1, 3):
+            self._add_particle(
+                "trail", mux, muy, bdx / bdist * speed * 0.6,
+                bdy / bdist * speed * 0.6, life - i, grav=0.0, flip=flip,
+            )
 
     def _knockback_cursor(self, aim, center_x, center_y, amount):
         """Shove the cursor away from the pet by `amount` px (clamped on-screen)."""
@@ -991,34 +1280,49 @@ class Pet:
         self.cursor_grab = (nx, ny)
 
     def _combat_fx(self, effect, x, y, sign):
-        """Spawn the pixel hit effect for a weapon at the impact point."""
+        """Spawn the pixel hit effect for a weapon at the impact point. Each
+        weapon reads differently: a fast dagger slash, a heavy hammer shockwave,
+        a piercing spear thrust, a punchy gunshot, an arrow thump."""
         if effect == "slash":
-            self._add_particle("slash", x, y, sign * 0.6, -0.3, 9, grav=0.0,
+            # Quick, light: a big slash arc and a fast fan of sparks.
+            self._add_particle("slash", x, y, sign * 0.6, -0.3, 10, grav=0.0,
                                flip=sign < 0)
-            for _ in range(4):
-                self._add_particle("spark", x, y, random.uniform(-2, 2) + sign,
-                                   random.uniform(-2, 1), random.randint(8, 14),
+            self._add_particle("slash", x - sign * 6, y - 4, sign * 0.6, -0.3, 7,
+                               grav=0.0, flip=sign < 0)
+            for _ in range(FX_SPARK_COUNT):
+                self._add_particle("spark", x, y, random.uniform(-2.4, 2.4) + sign,
+                                   random.uniform(-2.4, 1), random.randint(8, 14),
                                    grav=0.12)
         elif effect == "stab":
-            self._add_particle("slash", x, y, sign * 1.2, 0.0, 8, grav=0.0,
+            # Piercing thrust: a shockwave punched forward plus a spray of sparks.
+            self._add_particle("shock", x, y, 0.0, 0.0, 12, grav=0.0)
+            self._add_particle("slash", x, y, sign * 1.4, 0.0, 8, grav=0.0,
                                flip=sign < 0)
-            for _ in range(3):
-                self._add_particle("spark", x, y, sign * random.uniform(0.5, 2.5),
-                                   random.uniform(-1, 1), random.randint(6, 12),
+            for _ in range(FX_SPARK_COUNT):
+                self._add_particle("spark", x, y, sign * random.uniform(1.0, 3.2),
+                                   random.uniform(-1.2, 1.2), random.randint(7, 13),
                                    grav=0.1)
         elif effect == "smash":
-            self._add_particle("boom", x, y, 0.0, 0.0, 14, grav=0.0)
-            for _ in range(6):
-                self._add_particle("spark", x, y, random.uniform(-3, 3),
-                                   random.uniform(-3, 0.5), random.randint(10, 18),
+            # Heavy overhead: a big expanding shockwave, a boom, lots of sparks
+            # and dust kicked up on both sides — a real ground impact.
+            self._add_particle("shock", x, y, 0.0, 0.0, 16, grav=0.0)
+            self._add_particle("boom", x, y, 0.0, 0.0, 15, grav=0.0)
+            for _ in range(FX_SMASH_SPARK_COUNT):
+                self._add_particle("spark", x, y, random.uniform(-3.4, 3.4),
+                                   random.uniform(-3.4, 0.5), random.randint(10, 18),
                                    grav=0.18)
-            self._add_particle("dust", x - 4, y + 6, -1.2, -0.2, 18, grav=0.05)
-            self._add_particle("dust", x + 4, y + 6, 1.2, -0.2, 18, grav=0.05)
-        elif effect == "shot":
-            self._add_particle("boom", x, y, 0.0, 0.0, 10, grav=0.0)
-            for _ in range(4):
-                self._add_particle("spark", x, y, random.uniform(-2, 2),
-                                   random.uniform(-2, 2), random.randint(6, 12),
+            for i in range(FX_DUST_COUNT):
+                s = -1 if i % 2 else 1
+                self._add_particle("dust", x + s * 4, y + 6, s * 1.4,
+                                   random.uniform(-0.4, 0.2), random.randint(14, 22),
+                                   grav=0.05)
+        elif effect in ("shot", "arrow"):
+            # Ranged impact: a punchy burst, a small shockwave and sparks.
+            self._add_particle("boom", x, y, 0.0, 0.0, 11, grav=0.0)
+            self._add_particle("shock", x, y, 0.0, 0.0, 9, grav=0.0)
+            for _ in range(FX_SPARK_COUNT):
+                self._add_particle("spark", x, y, random.uniform(-2.4, 2.4),
+                                   random.uniform(-2.4, 2.4), random.randint(6, 12),
                                    grav=0.1)
 
     def _begin_capture(self, mouse):
@@ -1057,33 +1361,6 @@ class Pet:
         self.anger = 0.0
         self.capturing = False
         self._reset_combat()
-
-    def _rage_jump(self, mouse, platforms):
-        """Jump onto whichever reachable window edge gets him closest to the
-        cursor (used while enraged to scale up toward it)."""
-        if self.jump_cooldown > 0 or self.airborne or self.state == State.JUMP:
-            return
-        foot = self._feet_x()
-        current_y = self.y + WINDOW_H
-        best = None
-        best_score = None
-        for platform in platforms:
-            if platform["name"] == GROUND_PLATFORM_NAME:
-                continue
-            vertical = platform["y"] - current_y
-            if vertical > -20:
-                continue  # not meaningfully higher than where he stands
-            if vertical < -self.screen_h * MAX_TARGET_HEIGHT:
-                continue  # too high to reach
-            center = platform["x"] + platform["w"] * 0.5
-            if abs(center - foot) > self.screen_w * MAX_TARGET_DISTANCE:
-                continue  # too far sideways
-            score = abs(center - mouse[0]) + abs(platform["y"] - mouse[1])
-            if best_score is None or score < best_score:
-                best_score = score
-                best = platform
-        if best:
-            self.start_jump(best)
 
     def _maybe_follow_mouse(self, mouse):
         if self.angry or self.following:
@@ -1217,6 +1494,7 @@ class Pet:
         )
         self.baby = True
         self.growth = 0.0
+        self.baby_age = 0
         self.spawn_particles("heart", 4)
         self.start_talk(random.choice(BABY_PHRASES))
 
@@ -1258,10 +1536,21 @@ class Pet:
             self.spawn_particles("heart", 1)
 
     def _update_growth(self):
-        """Grow a baby up to full size, sparkling once it finishes."""
+        """Age a baby. It stays tiny (holding at BABY_MIN_SCALE) for the whole
+        BABY_GROW_DELAY, then grows gradually over BABY_GROW_FRAMES — so it's
+        noticeably small and cute for a long time before slowly becoming an adult,
+        never snapping to full size."""
         if not self.baby:
             return
-        self.growth = min(1.0, self.growth + BABY_GROW_RATE)
+        self.baby_age += 1
+        if self.baby_age < BABY_GROW_DELAY:
+            self.growth = 0.0
+            # An occasional wobble/squeak so a tiny baby still feels alive.
+            if self.baby_age % 240 == 0:
+                self.spawn_particles(random.choice(["heart", "note"]), 1)
+            return
+        grown = (self.baby_age - BABY_GROW_DELAY) / max(1, BABY_GROW_FRAMES)
+        self.growth = min(1.0, grown)
         if self.growth >= 1.0:
             self.baby = False
             self.spawn_particles("star", 4)
@@ -1492,6 +1781,14 @@ class Pet:
                 if self.speech_timer <= 0:
                     self._stop_talking(repick=False)
             self._update_combat(mouse, platforms)
+            if self.flying:
+                # Flight moved and clamped him already; skip the ground/gravity
+                # physics below so the jetpack isn't fighting gravity.
+                if self.vx > 0.1:
+                    self.facing_right = True
+                elif self.vx < -0.1:
+                    self.facing_right = False
+                return
         else:
             if self.talking and self._update_talking():
                 return

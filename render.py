@@ -29,10 +29,15 @@ from config import (
     EYE_WHITE,
     GHOST_COLOR,
     GUARD_COLOR,
+    GUARD_SHADE,
     GUN_COLOR,
     GUN_GRIP_COLOR,
+    GUN_SHADE,
+    GUN_HI,
     HAMMER_HEAD_COLOR,
+    HAMMER_HEAD_SHADE,
     HANDLE_COLOR,
+    HANDLE_SHADE,
     HEADPHONE_BAND,
     HEADPHONE_CUP,
     HEART_COLOR,
@@ -58,7 +63,17 @@ from config import (
     SPRITE_W,
     STAR_COLOR,
     STEEL_COLOR,
+    STEEL_SHADE,
+    STEEL_HI,
     SWEAT_COLOR,
+    SHOCK_COLOR,
+    TRAIL_COLOR,
+    FLAME_COLOR,
+    ARROW_COLOR,
+    MUZZLE_COLOR,
+    BOW_WOOD_COLOR,
+    BOW_WOOD_SHADE,
+    BOW_STRING_COLOR,
     WEAPON_SCALE,
     WINDOW_H,
     WINDOW_W,
@@ -296,26 +311,42 @@ POPCORN_PIXELS = [
     " ##",
 ]
 # Combat / removal effect sprites.
+# A bigger, curved blade arc so a slash reads clearly as a sweep.
 SLASH_PIXELS = [
-    "    #",
-    "   ##",
-    "  ## ",
-    " ##  ",
-    "##   ",
+    "      ##",
+    "    ####",
+    "  ####  ",
+    " ####   ",
+    "####    ",
+    "###     ",
+    "#       ",
 ]
 SPARK_PIXELS = [
     " # ",
     "###",
     " # ",
 ]
+# A chunkier starburst for a punchy impact.
 BOOM_PIXELS = [
-    "#  #  #",
-    " # # # ",
-    "  ###  ",
-    "## # ##",
-    "  ###  ",
-    " # # # ",
-    "#  #  #",
+    "#   #   #",
+    " #  #  # ",
+    "  # # #  ",
+    "   ###   ",
+    "###   ###",
+    "   ###   ",
+    "  # # #  ",
+    " #  #  # ",
+    "#   #   #",
+]
+# An expanding shockwave ring (drawn once; particle scale/life sell the growth).
+SHOCK_PIXELS = [
+    "  #####  ",
+    " #     # ",
+    "#       #",
+    "#       #",
+    "#       #",
+    " #     # ",
+    "  #####  ",
 ]
 HIT_PIXELS = [
     "#   #",
@@ -327,6 +358,35 @@ HIT_PIXELS = [
 BULLET_PIXELS = [
     "###",
     "###",
+]
+# A little arrow pointing right (flipped by the caller when it flies left).
+ARROW_PIXELS = [
+    "     # ",
+    "#######",
+    "#######",
+    "     # ",
+]
+# A short bright motion streak.
+TRAIL_PIXELS = [
+    "#####",
+    " ### ",
+]
+# A teardrop jetpack flame.
+FLAME_PIXELS = [
+    " # ",
+    "###",
+    "###",
+    " # ",
+]
+# A short muzzle / bowstring flash.
+MUZZLE_PIXELS = [
+    "  #  ",
+    "# # #",
+    " ### ",
+    "#####",
+    " ### ",
+    "# # #",
+    "  #  ",
 ]
 GHOST_PIXELS = [
     " ### ",
@@ -355,6 +415,11 @@ PARTICLE_PIXELS = {
     "slash": (SLASH_PIXELS, SLASH_COLOR),
     "spark": (SPARK_PIXELS, SPARK_COLOR),
     "boom": (BOOM_PIXELS, BOOM_COLOR),
+    "shock": (SHOCK_PIXELS, SHOCK_COLOR),
+    "trail": (TRAIL_PIXELS, TRAIL_COLOR),
+    "flame": (FLAME_PIXELS, FLAME_COLOR),
+    "arrow": (ARROW_PIXELS, ARROW_COLOR),
+    "muzzle": (MUZZLE_PIXELS, MUZZLE_COLOR),
     "hit": (HIT_PIXELS, HIT_COLOR),
     "bullet": (BULLET_PIXELS, BULLET_COLOR),
     "ghost": (GHOST_PIXELS, GHOST_COLOR),
@@ -368,7 +433,7 @@ def particle_sprite(kind):
     if sprite is None:
         pattern, color = PARTICLE_PIXELS[kind]
         h = len(pattern)
-        w = len(pattern[0])
+        w = max(len(row) for row in pattern)
         base = pygame.Surface((w, h), pygame.SRCALPHA)
         base.fill(CLEAR)
         for y, row in enumerate(pattern):
@@ -381,52 +446,99 @@ def particle_sprite(kind):
 
 
 # Pixel weapons, drawn pointing right (the main loop flips them to match the
-# pet's facing). Each maps pattern characters to colours.
+# pet's facing). Each row can be any length — the builder pads to the widest.
+# Legend shared across weapons:
+#   #=steel  s=steel shade  h=steel highlight  ==wood  w=wood shade
+#   |=guard  g=guard shade  o=gun body  k=gun shade  l=gun highlight
+#   b=bow wood  d=bow wood shade  t=bowstring
+# Dagger: short leaf blade, brass crossguard, wooden grip with a pommel.
 KNIFE_PIXELS = [
-    "        #   ",
-    "==== #####  ",
-    "==== #######",
-    "==== #####  ",
-    "        #   ",
+    "         h    ",
+    "       hh#s   ",
+    "  gw|########s",
+    "  ==|#########",
+    "  gw|#######ss",
+    "       sss#   ",
+    "         s    ",
 ]
+# Sword: long fullered blade, wide crossguard, bound grip and round pommel.
 SWORD_PIXELS = [
-    "   |            ",
-    "===|############",
-    "===|############",
-    "===|############",
-    "   |            ",
+    "        hhhhhhhhhhhhh ",
+    "   g|hhhhhhhhhhhhhhhhh",
+    " w==|################",
+    " w==|###############h",
+    " w==|################",
+    "   g|sssssssssssssssss",
+    "        sssssssssssss ",
 ]
-PISTOL_PIXELS = [
-    "  ######    ",
-    "  #######   ",
-    "=########   ",
-    "==###       ",
-    " ==         ",
-    "            ",
-]
-# A long wooden shaft tipped with a steel leaf blade, pointing right.
+# Spear: long wooden shaft with a grip wrap and a steel leaf head, tip right.
 SPEAR_PIXELS = [
-    "==============#    ",
-    "==============##   ",
-    "==============#####",
-    "==============##   ",
-    "==============#    ",
+    "                    h    ",
+    "===w=====w========hhh#   ",
+    "===========w======#####s ",
+    "==w=====w=========######h",
+    "===========w======#####s ",
+    "==================sss#   ",
+    "                    s    ",
 ]
-# A stubby wooden handle with a heavy steel head on the business end (right).
+# Hammer: stubby wrapped haft with a heavy blocky steel head, face on the right.
 HAMMER_PIXELS = [
-    "        ####",
-    "        ####",
-    "========####",
-    "========####",
-    "        ####",
-    "        ####",
+    "         hhhhhh",
+    "         h####s",
+    "         h####s",
+    "  ==w=====#####",
+    "  ==w=====#####",
+    "         s####s",
+    "         ss###s",
+    "         ssssss",
+]
+# Pistol: slide, frame and wooden grip, muzzle pointing right.
+PISTOL_PIXELS = [
+    "   llllllll  ",
+    "  loooooooool",
+    " kooooooooook",
+    "==koooookkkkk",
+    "===ooookk    ",
+    " ===okk      ",
+    "  ===k       ",
+]
+# Bow: a curved wooden limb strung taut, an arrow nocked pointing right.
+BOW_PIXELS = [
+    " td       b ",
+    " t d     bd ",
+    " t  d   bd  ",
+    " t   b#####h",
+    " t  d   bd  ",
+    " t d     bd ",
+    " td       b ",
 ]
 WEAPON_PIXELS = {
-    "knife": (KNIFE_PIXELS, {"#": STEEL_COLOR, "=": HANDLE_COLOR}),
-    "sword": (SWORD_PIXELS, {"#": STEEL_COLOR, "|": GUARD_COLOR, "=": HANDLE_COLOR}),
-    "spear": (SPEAR_PIXELS, {"#": STEEL_COLOR, "=": HANDLE_COLOR}),
-    "hammer": (HAMMER_PIXELS, {"#": HAMMER_HEAD_COLOR, "=": HANDLE_COLOR}),
-    "pistol": (PISTOL_PIXELS, {"#": GUN_COLOR, "=": GUN_GRIP_COLOR}),
+    "knife": (KNIFE_PIXELS, {
+        "#": STEEL_COLOR, "s": STEEL_SHADE, "h": STEEL_HI,
+        "=": HANDLE_COLOR, "w": HANDLE_SHADE,
+        "|": GUARD_COLOR, "g": GUARD_SHADE,
+    }),
+    "sword": (SWORD_PIXELS, {
+        "#": STEEL_COLOR, "s": STEEL_SHADE, "h": STEEL_HI,
+        "=": HANDLE_COLOR, "w": HANDLE_SHADE,
+        "|": GUARD_COLOR, "g": GUARD_SHADE,
+    }),
+    "spear": (SPEAR_PIXELS, {
+        "#": STEEL_COLOR, "s": STEEL_SHADE, "h": STEEL_HI,
+        "=": HANDLE_COLOR, "w": HANDLE_SHADE,
+    }),
+    "hammer": (HAMMER_PIXELS, {
+        "#": HAMMER_HEAD_COLOR, "s": HAMMER_HEAD_SHADE, "h": STEEL_HI,
+        "=": HANDLE_COLOR, "w": HANDLE_SHADE,
+    }),
+    "pistol": (PISTOL_PIXELS, {
+        "o": GUN_COLOR, "k": GUN_SHADE, "l": GUN_HI,
+        "=": GUN_GRIP_COLOR,
+    }),
+    "bow": (BOW_PIXELS, {
+        "b": BOW_WOOD_COLOR, "d": BOW_WOOD_SHADE, "t": BOW_STRING_COLOR,
+        "#": ARROW_COLOR, "h": STEEL_HI,
+    }),
 }
 _WEAPON_CACHE = {}
 
@@ -437,7 +549,7 @@ def draw_weapon(kind):
     if sprite is None:
         pattern, colors = WEAPON_PIXELS[kind]
         h = len(pattern)
-        w = len(pattern[0])
+        w = max(len(row) for row in pattern)
         base = pygame.Surface((w, h), pygame.SRCALPHA)
         base.fill(CLEAR)
         for y, row in enumerate(pattern):
@@ -461,7 +573,7 @@ def weapon_pose(pet):
     """
     kind = pet.weapon
     base = draw_weapon(kind)
-    ranged = bool(WEAPON_PIXELS.get(kind) and kind == "pistol")
+    ranged = kind in ("pistol", "bow")
     sign = 1 if pet.facing_right else -1
 
     phase = getattr(pet, "combat_phase", None)
@@ -500,6 +612,49 @@ def weapon_pose(pet):
     hand_y = WINDOW_H * 0.45 - lift
     dx = hand_x - img.get_width() / 2
     dy = hand_y - img.get_height() / 2
+    return img, dx, dy
+
+
+# Jetpack strapped to the pet's back while flying: a little tank with two nozzles.
+JETPACK_PIXELS = [
+    " kk ",
+    "koodk",
+    "koodk",
+    "koodk",
+    "koodk",
+    " kk ",
+    "k  k",
+]
+_JETPACK_SPRITE = None
+
+
+def draw_flight_rig(pet):
+    """Return ``(surface, dx, dy)`` for the jetpack worn while flying, offset from
+    the pet sprite's top-left. Sits on the pet's back (opposite his facing) and
+    bobs a touch with the frame so it reads as thrusting."""
+    global _JETPACK_SPRITE
+    if _JETPACK_SPRITE is None:
+        colors = {"o": GUN_COLOR, "k": GUN_SHADE, "d": GUN_HI}
+        h = len(JETPACK_PIXELS)
+        w = max(len(row) for row in JETPACK_PIXELS)
+        base = pygame.Surface((w, h), pygame.SRCALPHA)
+        base.fill(CLEAR)
+        for y, row in enumerate(JETPACK_PIXELS):
+            for x, cell in enumerate(row):
+                color = colors.get(cell)
+                if color is not None:
+                    base.set_at((x, y), color)
+        _JETPACK_SPRITE = pygame.transform.scale(
+            base, (w * WEAPON_SCALE, h * WEAPON_SCALE)
+        )
+    img = _JETPACK_SPRITE
+    # Behind the pet: to his left when facing right, and vice versa.
+    back = -1 if pet.facing_right else 1
+    bob = 1.0 if (pet.frame // 4) % 2 else -1.0
+    x = WINDOW_W * 0.5 + back * WINDOW_W * 0.34
+    y = WINDOW_H * 0.42 + bob
+    dx = x - img.get_width() / 2
+    dy = y - img.get_height() / 2
     return img, dx, dy
 
 

@@ -101,6 +101,18 @@ HIT_COLOR = (255, 92, 80, 255)       # Red hit-marker cross.
 BULLET_COLOR = (250, 222, 120, 255)  # Pistol projectile.
 GHOST_COLOR = (214, 224, 244, 255)   # Floating ghost on a ghostly death.
 POOF_COLOR = (236, 238, 244, 255)    # Puff cloud on a poof death.
+SHOCK_COLOR = (255, 236, 200, 255)   # Expanding shockwave ring (hammer/impact).
+TRAIL_COLOR = (198, 214, 255, 255)   # Dash / motion streak behind a lunge.
+FLAME_COLOR = (255, 168, 72, 255)    # Jetpack exhaust flame.
+ARROW_COLOR = (210, 176, 120, 255)   # Bow projectile shaft.
+MUZZLE_COLOR = (255, 246, 196, 255)  # Muzzle / bowstring flash.
+
+# Combat effect strength — how much visual punch each hit throws. Bumped up so
+# attacks read clearly; still small sprites so the overlay stays cheap.
+FX_SPARK_COUNT = 7                   # Sparks flung on a clean melee hit.
+FX_SMASH_SPARK_COUNT = 12            # Extra sparks on a heavy hammer smash.
+FX_DUST_COUNT = 4                    # Dust puffs kicked up on an impact.
+FX_TRAIL_COUNT = 5                   # Motion streaks left by a dash/lunge.
 
 # App-aware activity props --------------------------------------------------
 # The pet reacts to what you're doing: it works on a laptop during a focus
@@ -128,15 +140,25 @@ IDLE_FX_MAX = 1080
 
 # Anger ---------------------------------------------------------------------
 ANGRY_THRESHOLD = 3                  # Clicks (before cooling down) that anger the pet.
-ANGRY_DURATION = 240                 # Frames the pet stays grumpy (~4s).
-ANGER_DECAY = 0.015                  # Anger cooled per frame.
+ANGRY_DURATION = 420                 # Frames the pet stays grumpy (~7s).
+ANGER_DECAY = 0.010                  # Anger cooled per frame (slower = stays cross longer).
 
 # Rage / combat -------------------------------------------------------------
+# Once enraged he commits to the fight. He will NOT calm down on a timer alone:
+# he has to actually land RAGE_HITS_TO_CALM clean blows (or capture the cursor),
+# and even then only after RAGE_MIN_DURATION has passed. A hard RAGE_MAX_DURATION
+# ceiling stops a fight lasting forever if the cursor is parked out of reach.
 RAGE_THRESHOLD = 6                   # Total anger that tips him into violence.
-RAGE_DURATION = 600                  # Frames he stays violent once calm (gives him
-                                     # time to actually fight rather than fizzle out).
+RAGE_DURATION = 900                  # Base frames he stays violent (~15s).
+RAGE_MIN_DURATION = 480              # He can't calm before this many frames (~8s).
+RAGE_MAX_DURATION = 2400             # Hard ceiling so a fight can't run forever (~40s).
+RAGE_HITS_TO_CALM = 3               # Clean hits he must land before he'll calm down.
 RAGE_CHASE_SPEED = 3.4               # How fast he charges the cursor when armed.
-WEAPONS = ["knife", "sword", "spear", "hammer", "pistol"]
+WEAPONS = ["knife", "sword", "spear", "hammer", "bow", "pistol"]
+# Weapons that shoot rather than swing — the combat brain reaches for one of
+# these when the cursor is floating somewhere it cannot get to on foot.
+RANGED_WEAPONS = ["bow", "pistol"]
+MELEE_WEAPONS = ["knife", "sword", "spear", "hammer"]
 
 # Per-weapon combat profile. Each weapon feels distinct: the range it strikes
 # from, the windup -> strike -> recovery timing (frames), the cooldown between
@@ -176,12 +198,34 @@ WEAPON_STATS = {
         "cooldown": 44, "lunge": 12, "knockback": 54, "hits_to_win": 2,
         "ranged": False, "effect": "smash",
     },
+    "bow": {  # ranged: draws back, then looses an arrow that streaks to the aim.
+        "range": 340, "approach": 240, "windup": 18, "strike": 4, "recovery": 16,
+        "cooldown": 32, "lunge": 0, "knockback": 40, "hits_to_win": 3,
+        "ranged": True, "effect": "arrow",
+    },
     "pistol": {  # ranged: aims, then fires a small projectile from afar.
-        "range": 260, "approach": 200, "windup": 14, "strike": 4, "recovery": 18,
+        "range": 300, "approach": 220, "windup": 14, "strike": 4, "recovery": 18,
         "cooldown": 36, "lunge": 0, "knockback": 66, "hits_to_win": 2,
         "ranged": True, "effect": "shot",
     },
 }
+
+# Combat AI / mobility ------------------------------------------------------
+# The brain first asks whether it can actually reach the cursor. If the cursor
+# floats higher than FLY_TRIGGER_HEIGHT above the pet's feet (out of walking /
+# small-hop reach), a melee fighter fires up a little jetpack and flies at it
+# rather than hopping uselessly toward the top of the screen. A ranged fighter
+# just lines up and shoots. If a flight runs out of fuel without landing a hit
+# too many times, the pet adapts and pulls a ranged weapon instead.
+FLY_TRIGGER_HEIGHT = 74              # Cursor this far above feet -> unreachable on foot.
+FLY_THRUST = 0.7                     # Accel per frame toward the cursor while flying.
+FLY_MAX_SPEED = 6.5                  # Speed cap while flying.
+FLY_LIFTOFF_VY = -3.0               # Initial upward kick on take-off.
+FLY_DURATION = 170                   # Frames of jetpack fuel per launch (~2.8s).
+FLY_COOLDOWN = 40                    # Frames grounded before he can fly again.
+FLY_HOVER_RANGE = 1.05               # Range multiplier for attacking mid-air.
+FLY_FLAME_CHANCE = 0.85              # Per-frame chance of a jetpack flame puff.
+REACH_FAILS_TO_RANGED = 2            # Fruitless flights before switching to ranged.
 
 # Capturing the cursor: after landing hits_to_win clean blows he pounces, pins
 # the pointer for a beat (celebrating), then flings it across the screen and
@@ -207,14 +251,38 @@ LOVE_DECAY = 0.01                    # Love cooled per frame.
 # inheriting a blend of its parents' colour, temperament, name, and weapon
 # taste. A cooldown stops it being spammed; MAX_PETS caps the population.
 MAX_PETS = 12                        # Hard cap so breeding can't run away.
-BREED_COOLDOWN = 480                 # Frames between breedings (~8s).
+BREED_COOLDOWN = 900                 # Frames between breedings (~15s).
 COURT_SPEED = 1.7                    # Walk speed while waddling toward a mate.
 COURT_REACH = 60                     # Distance (px) at which the parents "meet".
-COURT_TIMEOUT = 360                  # Give up closing the gap after this (~6s).
+COURT_TIMEOUT = 480                  # Give up closing the gap after this (~8s).
 COURT_HEART_CHANCE = 0.12            # Per-frame chance of a heart while courting.
-BABY_MIN_SCALE = 0.5                 # How small a newborn starts (fraction of adult).
-BABY_GROW_RATE = 0.0016              # Growth per frame (~10s to reach full size).
+# The meeting: once both parents arrive they play a short cuddle — a shower of
+# hearts and a little bounce — before the baby actually pops out.
+COURT_MEET_FRAMES = 96               # Length of the breeding moment (~1.6s).
+COURT_MEET_HEART_CHANCE = 0.55       # Per-frame heart chance during the meeting.
+
+# Babies --------------------------------------------------------------------
+# A newborn stays tiny and cute for a good while. It holds at BABY_MIN_SCALE for
+# BABY_GROW_DELAY frames (barely growing), then grows the rest of the way over
+# BABY_GROW_FRAMES so the change is gradual and noticeable — no snapping to full
+# size after a blink.
+BABY_MIN_SCALE = 0.42                # How small a newborn starts (fraction of adult).
+BABY_GROW_DELAY = 2400               # Frames it stays tiny before growing (~40s).
+BABY_GROW_FRAMES = 3000              # Frames to grow to full after the delay (~50s).
 BABY_NAME_SUFFIX = " Jr"             # Appended when a baby takes a parent's name.
+# Babies are defenceless: a click/attack scares them into running away and hiding
+# instead of arming up, and it flags nearby adults to come to the rescue.
+BABY_FLEE_SPEED = 2.6                # Run speed while fleeing a threat.
+BABY_FLEE_DURATION = 200             # Frames a baby stays scared and running (~3.3s).
+BABY_DEFENSE_RADIUS = 320            # Adults within this of a threatened baby defend it.
+
+# Group combat --------------------------------------------------------------
+# Pets back each other up. When one adult goes to war, other adults CLOSE ENOUGH
+# to it (not the whole screen) notice and join in — but only on a chance roll so
+# they don't all pile in on the same frame. Babies never join.
+GROUP_SUPPORT_RADIUS = 260           # Distance (px) within which adults join a fight.
+GROUP_JOIN_CHANCE = 0.05             # Per-frame chance a nearby adult joins in.
+GROUP_JOIN_ANGER = 4.0               # Anger seeded into a recruit (tips it toward rage).
 
 # Removal / death -----------------------------------------------------------
 # Removing a pet plays a short, silly send-off instead of a blink-out. Removing
@@ -337,11 +405,20 @@ FETCH_REACH_HEIGHT = 90              # Only chase a ball within this vertical re
 WEAPON_SCALE = 3
 STEEL_COLOR = (206, 212, 224, 255)
 STEEL_SHADE = (150, 158, 172, 255)
+STEEL_HI = (244, 248, 255, 255)      # Bright edge/highlight on a blade.
 HANDLE_COLOR = (120, 72, 40, 255)
+HANDLE_SHADE = (86, 50, 26, 255)     # Darker underside of a wooden handle/shaft.
 GUARD_COLOR = (222, 182, 64, 255)
+GUARD_SHADE = (176, 138, 40, 255)    # Shaded side of a brass guard/pommel.
 GUN_COLOR = (58, 60, 70, 255)
+GUN_SHADE = (36, 38, 46, 255)        # Darker gun body.
+GUN_HI = (120, 126, 140, 255)        # Slide highlight on the gun.
 GUN_GRIP_COLOR = (120, 72, 40, 255)
-HAMMER_HEAD_COLOR = (108, 114, 130, 255)  # Dark steel hammer head.
+HAMMER_HEAD_COLOR = (128, 134, 150, 255)  # Steel hammer head.
+HAMMER_HEAD_SHADE = (92, 98, 114, 255)    # Shaded side of the hammer head.
+BOW_WOOD_COLOR = (150, 96, 52, 255)  # Bow limb wood.
+BOW_WOOD_SHADE = (108, 66, 34, 255)  # Shaded side of the bow limb.
+BOW_STRING_COLOR = (232, 236, 244, 255)   # Taut bowstring.
 
 ANGRY_PHRASES = [
     "Hey!",

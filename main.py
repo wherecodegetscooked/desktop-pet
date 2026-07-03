@@ -10,6 +10,7 @@ Supports multiple pets: the menu-bar "Breed" item spawns a child and
 love you; clicking it too often makes it arm itself and chase the cursor.
 """
 
+import math
 import os
 import random
 import signal
@@ -29,11 +30,17 @@ from config import (
     BUBBLE_GAP,
     CLEAR,
     COURT_TIMEOUT,
+    COURT_MEET_FRAMES,
+    COURT_MEET_HEART_CHANCE,
     FOCUS_MINUTES,
     FPS,
     FX_H,
     FX_W,
     MAX_PETS,
+    GROUP_SUPPORT_RADIUS,
+    GROUP_JOIN_CHANCE,
+    GROUP_JOIN_ANGER,
+    BABY_DEFENSE_RADIUS,
     WINDOW_H,
     WINDOW_W,
 )
@@ -41,6 +48,7 @@ from overlay import MacOverlay
 from pet import Pet
 from render import (
     draw_ball,
+    draw_flight_rig,
     draw_pet_frame,
     draw_speech_bubble,
     particle_sprite,
@@ -140,7 +148,7 @@ def render_pet(entry, display_rects):
     overlay.move(round(pet.x), round(pet.y))
     overlay.show_surface(canvas)
 
-    if pet.talking or pet.particles or pet.weapon:
+    if pet.talking or pet.particles or pet.weapon or pet.flying:
         origin_x = round(pet.x + WINDOW_W / 2 - FX_W / 2)
         origin_y = round(pet.y + WINDOW_H / 2 - FX_H / 2)
         # Keep the effects window fully inside the SINGLE display the pet is on,
@@ -175,6 +183,11 @@ def render_pet(entry, display_rects):
                     round(p["y"] - origin_y - sprite.get_height() / 2),
                 ),
             )
+
+        # Jetpack sits behind the pet, so draw it before the weapon (in front).
+        if pet.flying:
+            rig, rdx, rdy = draw_flight_rig(pet)
+            fx_canvas.blit(rig, (round(pet_left + rdx), round(pet_top + rdy)))
 
         if pet.weapon:
             weapon, wdx, wdy = weapon_pose(pet)
@@ -481,6 +494,42 @@ def main():
             if pet.cursor_lock is not None:
                 primary.warp_cursor(*pet.cursor_lock)
 
+        # Group behaviour: pets back each other up. A fighting adult rallies other
+        # adults CLOSE to it into the fight, and any adult near a scared baby drops
+        # everything to defend it (aiming at whatever spooked the baby). Only
+        # nearby adults react, and only on a chance roll, so it never turns into an
+        # instant screen-wide brawl. Babies never join.
+        def _center(p):
+            return (p.x + WINDOW_W / 2, p.y + WINDOW_H / 2)
+
+        adults = [e["pet"] for e in pets if not e["pet"].baby and not e["pet"].dying]
+        fighters = [p for p in adults if p.rage]
+        threatened = [
+            e["pet"] for e in pets
+            if e["pet"].baby and e["pet"].needs_defense > 0
+        ]
+        if fighters or threatened:
+            for pet in adults:
+                if pet.rage or pet.scared:
+                    continue
+                px, py = _center(pet)
+                # Defend a nearby threatened baby first — top priority.
+                for baby in threatened:
+                    bx, by = _center(baby)
+                    if math.hypot(px - bx, py - by) <= BABY_DEFENSE_RADIUS:
+                        pet.provoke_to_fight(GROUP_JOIN_ANGER, baby.threat_pos or mouse)
+                        break
+                else:
+                    # Otherwise, maybe join a brawl already underway nearby.
+                    for ally in fighters:
+                        if ally is pet:
+                            continue
+                        ax, ay = _center(ally)
+                        if (math.hypot(px - ax, py - ay) <= GROUP_SUPPORT_RADIUS
+                                and random.random() < GROUP_JOIN_CHANCE):
+                            pet.provoke_to_fight(GROUP_JOIN_ANGER, ally._aim or mouse)
+                            break
+
         # Cull pets whose removal animation has finished, keeping the menu window
         # alive so the app stays usable even at zero pets.
         if any(entry["pet"].dead for entry in pets):
@@ -491,8 +540,10 @@ def main():
                     release_entry(entry)
             pets = [entry for entry in pets if not entry["pet"].dead]
 
-        # Courtship: drive the two parents together; when they meet (or time out)
-        # a baby is born at the midpoint and inherits a blend of their traits.
+        # Courtship: drive the two parents together; when they meet they play a
+        # short cuddle — facing each other under a shower of hearts — and only
+        # THEN does a baby pop out at the midpoint, inheriting a blend of their
+        # traits. A timeout still forces the meeting so it can't stall forever.
         if courting is not None:
             a_entry, b_entry = courting["a"], courting["b"]
             a_pet, b_pet = a_entry["pet"], b_entry["pet"]
@@ -509,17 +560,36 @@ def main():
                 a_pet.stop_courting()
                 b_pet.stop_courting()
                 courting = None
+            elif courting.get("meet", 0) > 0:
+                # The breeding moment: hold still, face each other, shower hearts.
+                courting["meet"] -= 1
+                a_pet.facing_right = b_pet.x >= a_pet.x
+                b_pet.facing_right = a_pet.x >= b_pet.x
+                if random.random() < COURT_MEET_HEART_CHANCE:
+                    a_pet.spawn_particles("heart", 1)
+                if random.random() < COURT_MEET_HEART_CHANCE:
+                    b_pet.spawn_particles("heart", 1)
+                if courting["meet"] <= 0:
+                    # Cuddle done — the baby arrives near its parents.
+                    if len(living_pets()) < MAX_PETS:
+                        midx = (a_pet.x + b_pet.x) / 2
+                        midy = min(a_pet.y, b_pet.y)
+                        baby = make_pet(x=midx, y=midy)
+                        baby["pet"].make_baby(a_pet, b_pet)
+                        a_pet.spawn_particles("heart", 5)
+                        b_pet.spawn_particles("heart", 5)
+                    a_pet.stop_courting()
+                    b_pet.stop_courting()
+                    courting = None
             elif ready or courting["timer"] >= COURT_TIMEOUT:
-                if len(living_pets()) < MAX_PETS:
-                    midx = (a_pet.x + b_pet.x) / 2
-                    midy = min(a_pet.y, b_pet.y)
-                    baby = make_pet(x=midx, y=midy)
-                    baby["pet"].make_baby(a_pet, b_pet)
-                    a_pet.spawn_particles("heart", 4)
-                    b_pet.spawn_particles("heart", 4)
-                a_pet.stop_courting()
-                b_pet.stop_courting()
-                courting = None
+                # Arrived (or gave up chasing): freeze the pair and begin the
+                # meeting with a big heart burst.
+                courting["meet"] = COURT_MEET_FRAMES
+                a_pet.court_arrived = True
+                b_pet.court_arrived = True
+                a_pet.vx = b_pet.vx = 0.0
+                a_pet.spawn_particles("heart", 4)
+                b_pet.spawn_particles("heart", 4)
 
         if breed_cooldown > 0:
             breed_cooldown -= 1
