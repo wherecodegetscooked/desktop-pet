@@ -231,10 +231,14 @@ REACH_FAILS_TO_RANGED = 2            # Fruitless flights before switching to ran
 
 # Playful jetpack hop: even when perfectly calm, now and then he fires the
 # jetpack for fun instead of a normal jump — floating up and drifting a little
-# before settling back down. Roughly one in ten jumps.
-JETPACK_HOP_CHANCE = 0.1             # Fraction of untargeted jumps done as a hop.
-JETPACK_HOP_DURATION = 90            # Frames of joyful hover (~1.5s).
-JOY_FLY_THRUST = 0.35               # Up/down thrust per frame during the hop.
+# before settling back down. He rises, hovers, then eases back down UNDER POWER
+# (a controlled descent, not a free-fall) and touches down softly, so he never
+# looks like he's teleporting to the floor.
+JETPACK_HOP_CHANCE = 0.15            # Fraction of untargeted jumps done as a hop.
+JETPACK_HOP_DURATION = 60            # Frames of rise + hover before easing down.
+JOY_FLY_THRUST = 0.35               # Upward thrust per frame while rising.
+JOY_FLY_RISE_CAP = 4.0              # Cap on climb speed so the hop isn't a rocket.
+JOY_FLY_DESCEND_SPEED = 2.6         # Gentle, capped speed of the powered descent.
 
 # Capturing the cursor: after landing hits_to_win clean blows he pounces, pins
 # the pointer for a beat (celebrating), then flings it across the screen and

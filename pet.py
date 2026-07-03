@@ -106,6 +106,8 @@ from config import (
     JETPACK_HOP_CHANCE,
     JETPACK_HOP_DURATION,
     JOY_FLY_THRUST,
+    JOY_FLY_RISE_CAP,
+    JOY_FLY_DESCEND_SPEED,
     RAGE_MIN_DURATION,
     RAGE_MAX_DURATION,
     RAGE_HITS_TO_CALM,
@@ -1178,15 +1180,21 @@ class Pet:
         self.spawn_particles("flame", 2)
 
     def _update_joy_flight(self, platforms):
-        """Float up, drift sideways trailing exhaust, then ease off the thrust and
-        fall back into normal gravity so he always lands."""
+        """Rise and hover for a beat, then ease back down UNDER POWER — a slow,
+        capped descent that touches down softly on the ground or a ledge. The
+        engine flies him all the way to the floor rather than cutting out mid-air,
+        so he never free-falls (which read as a downward 'teleport')."""
         self.joy_fly_timer -= 1
-        # Thrust up for the first part of the hop, then ease off so he settles.
-        if self.joy_fly_timer > JETPACK_HOP_DURATION * 0.4:
+        if self.joy_fly_timer > JETPACK_HOP_DURATION * 0.5:
+            # Climb: thrust up, but cap the climb so it's a hop, not a rocket.
             self.joy_fly_vy -= JOY_FLY_THRUST
+            self.joy_fly_vy = max(-JOY_FLY_RISE_CAP, self.joy_fly_vy)
+        elif self.joy_fly_timer > 0:
+            # Hover: bleed the vertical speed toward zero and hang for a beat.
+            self.joy_fly_vy *= 0.8
         else:
-            self.joy_fly_vy += JOY_FLY_THRUST * 0.6
-        self.joy_fly_vy = max(-FLY_MAX_SPEED, min(FLY_MAX_SPEED, self.joy_fly_vy))
+            # Powered descent: ease toward a gentle, fixed downward speed.
+            self.joy_fly_vy += (JOY_FLY_DESCEND_SPEED - self.joy_fly_vy) * 0.2
         # Occasionally nudge the drift so the hover isn't a dead-straight line.
         if random.random() < 0.03:
             self.joy_fly_vx = random.uniform(-2.0, 2.0)
@@ -1201,11 +1209,55 @@ class Pet:
                 random.randint(6, 12), grav=0.02,
             )
         self._clamp_position()
-        if self.joy_fly_timer <= 0:
+        # While descending, look for a platform/ground to touch down on.
+        if self.joy_fly_vy > 0 and self._joy_try_land(platforms):
+            return
+        # Safety net: never hover forever if he somehow can't find a spot.
+        if self.joy_fly_timer <= -900:
             self._end_joy_flight()
 
+    def _joy_try_land(self, platforms):
+        """Soft-land the hop: if his feet have reached the ground or crossed a
+        ledge this frame, snap onto it and resume normal behaviour. Returns True
+        once landed."""
+        feet_y = self.y + WINDOW_H
+        # Ground first (the descent is clamped to the floor by _clamp_position).
+        if feet_y >= self.max_y - 0.5:
+            self.y = self.max_y - WINDOW_H
+            self._finish_joy_land(self._ground_under_feet(platforms))
+            return True
+        foot_x = self._feet_x()
+        prev_feet = feet_y - self.joy_fly_vy
+        best = None
+        for platform in platforms:
+            if platform["name"] == GROUND_PLATFORM_NAME:
+                continue
+            if not (platform["x"] <= foot_x <= platform["x"] + platform["w"]):
+                continue
+            if prev_feet <= platform["y"] <= feet_y:
+                if best is None or platform["y"] < best["y"]:
+                    best = platform
+        if best is not None:
+            self.y = best["y"] - WINDOW_H
+            self._finish_joy_land(best)
+            return True
+        return False
+
+    def _finish_joy_land(self, platform):
+        """Touch down from a hop: settle on the platform and pick a normal state."""
+        self.joy_flying = False
+        self.airborne = False
+        self.platform = platform
+        self.jump_vy = 0.0
+        self.vx = self.joy_fly_vx * 0.4
+        self.fly_cooldown = FLY_COOLDOWN
+        self.jump_cooldown = 30
+        self.spawn_particles("dust", 2)
+        if not self.rage:
+            self.pick_state()
+
     def _end_joy_flight(self):
-        """Cut the engine and drop into normal gravity to land."""
+        """Safety fallback: cut the engine and hand off to normal gravity."""
         self.joy_flying = False
         self.fly_cooldown = FLY_COOLDOWN
         self.airborne = True
