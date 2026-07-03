@@ -7,6 +7,8 @@ which prop the pet should show. The detection plumbing lives in `overlay.py`
 module holds only the lookup tables, so adding a new app is a one-line edit.
 
 Reactions:
+  "call"   -> holds a phone to its ear (a call app like Teams / Zoom in the
+              foreground while audio is actually playing — i.e. a live call)
   "work"   -> works on a laptop and types (focus session, editors, IDEs,
               terminals, office / notes apps)
   "video"  -> munches popcorn (a video player or a YouTube-style browser tab —
@@ -73,6 +75,18 @@ GAME_BUNDLES = {
     "com.epicgames.launcher",
 }
 
+# Video-call apps. Being *in* a call is inferred from one of these being
+# frontmost while audio is actually playing (see classify()).
+CALL_BUNDLES = {
+    "com.microsoft.teams",       # Teams classic
+    "com.microsoft.teams2",      # new Teams
+    "com.microsoft.teams2.iphone",
+    "us.zoom.xos",               # Zoom
+    "Cisco-Systems.Spark",       # Webex
+    "com.cisco.webexmeetingsapp",
+    "com.apple.FaceTime",
+}
+
 # Substring fallbacks on the lowercased app name, used when the bundle id is
 # missing or unrecognised.
 WORK_NAME_HINTS = (
@@ -82,6 +96,7 @@ WORK_NAME_HINTS = (
 )
 VIDEO_NAME_HINTS = ("quicktime", "vlc", "iina", "netflix", "plex", "infuse")
 GAME_NAME_HINTS = ("steam", "epic games", "minecraft")
+CALL_NAME_HINTS = ("teams", "zoom", "webex", "facetime")
 BROWSER_NAME_HINTS = (
     "safari", "chrome", "firefox", "edge", "brave", "arc", "opera", "vivaldi", "zen"
 )
@@ -92,12 +107,18 @@ VIDEO_TITLE_KEYWORDS = (
     "hbo", "crunchyroll", "- video",
 )
 
+# Matched against the lowercased browser window title to spot a call tab
+# (Google Meet, Teams / Webex web clients).
+CALL_TITLE_KEYWORDS = (
+    "google meet", "meet.google", "microsoft teams", "webex", "whereby",
+)
+
 
 def needs_title(bundle, app_name):
     """Whether classify() needs the frontmost window title for this app.
 
-    Only browsers do (to tell a video tab from ordinary browsing), so we skip
-    the window-list peek otherwise.
+    Only browsers do (to tell a video or call tab from ordinary browsing), so we
+    skip the window-list peek otherwise.
     """
     name = (app_name or "").lower()
     return bundle in BROWSER_BUNDLES or any(h in name for h in BROWSER_NAME_HINTS)
@@ -111,14 +132,20 @@ def _matches(bundle, app_name, bundles, name_hints):
 
 
 def classify(bundle, app_name, window_title, focus_active, audio_playing):
-    """Return the foreground prop context: "work" | "video" | "gaming" | None.
+    """Return the foreground prop context: "call" | "work" | "video" | "gaming"
+    | None.
 
-    A focus session always means "work". Video (a video app or a YouTube-style
-    browser tab) only counts while `audio_playing` is True, so a paused video
+    A live call (a call app like Teams / Zoom in front, or a Google-Meet browser
+    tab, *while audio is playing*) wins over everything but a focus session, so
+    the pet picks up the phone. Video (a video app or a YouTube-style browser
+    tab) also only counts while `audio_playing` is True, so a paused video
     doesn't get popcorn. Music headphones are decided separately by the caller.
     """
     if focus_active:
         return "work"
+    # On a call: a call app frontmost with sound actually running.
+    if _matches(bundle, app_name, CALL_BUNDLES, CALL_NAME_HINTS):
+        return "call" if audio_playing else None
     if _matches(bundle, app_name, VIDEO_BUNDLES, VIDEO_NAME_HINTS):
         return "video" if audio_playing else None
     if _matches(bundle, app_name, GAME_BUNDLES, GAME_NAME_HINTS):
@@ -127,6 +154,8 @@ def classify(bundle, app_name, window_title, focus_active, audio_playing):
         return "work"
     if needs_title(bundle, app_name) and audio_playing:
         title = (window_title or "").lower()
+        if any(keyword in title for keyword in CALL_TITLE_KEYWORDS):
+            return "call"
         if any(keyword in title for keyword in VIDEO_TITLE_KEYWORDS):
             return "video"
     return None

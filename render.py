@@ -50,6 +50,8 @@ from config import (
     LAPTOP_LOGO,
     NOTE_COLOR,
     PARTICLE_SCALE,
+    PHONE_BODY,
+    PHONE_SCREEN,
     PET_COLOR,
     PET_SHADE,
     POOF_COLOR,
@@ -695,6 +697,21 @@ def _draw_headphones(small, body_y):
     rect(small, 14, body_y + 1, 2, 4, HEADPHONE_CUP)
 
 
+def _draw_phone(small, body_y, frame):
+    """A smartphone held up to the pet's ear during a call, screen glowing, with
+    a couple of little sound waves blinking beside it."""
+    ear_x = 14
+    for dy in range(0, 5):
+        px(small, ear_x, body_y + dy, PHONE_BODY)
+        px(small, ear_x + 1, body_y + dy, PHONE_BODY)
+    px(small, ear_x, body_y + 1, PHONE_SCREEN)
+    px(small, ear_x, body_y + 2, PHONE_SCREEN)
+    # Blinking sound waves off the earpiece.
+    if (frame // 12) % 2 == 0:
+        px(small, ear_x + 3, body_y, PHONE_SCREEN)
+        px(small, ear_x + 3, body_y + 2, PHONE_SCREEN)
+
+
 def _draw_popcorn(small, body_y):
     """A red-and-white striped popcorn tub held at the belly, popped on top."""
     top = body_y + 7
@@ -892,7 +909,9 @@ def draw_pet_frame(pet):
     )
     if calm:
         activity = getattr(pet, "activity", None)
-        if activity == "work":
+        if activity == "call":
+            _draw_phone(small, body_y, pet.frame)
+        elif activity == "work":
             _draw_laptop(small, body_y, pet.frame)
         elif activity == "video":
             _draw_popcorn(small, body_y)

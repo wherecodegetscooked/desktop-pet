@@ -130,6 +130,8 @@ POPCORN_STRIPE = (246, 246, 246, 255)
 POPCORN_KERNEL = (250, 226, 130, 255)
 HEADPHONE_BAND = (52, 56, 68, 255)
 HEADPHONE_CUP = (74, 80, 96, 255)
+PHONE_BODY = (44, 48, 58, 255)          # Smartphone held to the ear on a call.
+PHONE_SCREEN = (120, 210, 255, 255)     # Lit screen glow.
 
 # Mouse interaction --------------------------------------------------------
 FOLLOW_CHANCE = 0.004                # Per-frame chance to start chasing the cursor.
