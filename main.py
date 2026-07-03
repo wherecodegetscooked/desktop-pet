@@ -148,7 +148,7 @@ def render_pet(entry, display_rects):
     overlay.move(round(pet.x), round(pet.y))
     overlay.show_surface(canvas)
 
-    if pet.talking or pet.particles or pet.weapon or pet.flying:
+    if pet.talking or pet.particles or pet.weapon or pet.flying or pet.joy_flying:
         origin_x = round(pet.x + WINDOW_W / 2 - FX_W / 2)
         origin_y = round(pet.y + WINDOW_H / 2 - FX_H / 2)
         # Keep the effects window fully inside the SINGLE display the pet is on,
@@ -185,7 +185,7 @@ def render_pet(entry, display_rects):
             )
 
         # Jetpack sits behind the pet, so draw it before the weapon (in front).
-        if pet.flying:
+        if pet.flying or pet.joy_flying:
             rig, rdx, rdy = draw_flight_rig(pet)
             fx_canvas.blit(rig, (round(pet_left + rdx), round(pet_top + rdy)))
 

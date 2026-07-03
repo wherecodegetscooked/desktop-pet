@@ -229,6 +229,13 @@ FLY_HOVER_RANGE = 1.05               # Range multiplier for attacking mid-air.
 FLY_FLAME_CHANCE = 0.85              # Per-frame chance of a jetpack flame puff.
 REACH_FAILS_TO_RANGED = 2            # Fruitless flights before switching to ranged.
 
+# Playful jetpack hop: even when perfectly calm, now and then he fires the
+# jetpack for fun instead of a normal jump — floating up and drifting a little
+# before settling back down. Roughly one in ten jumps.
+JETPACK_HOP_CHANCE = 0.1             # Fraction of untargeted jumps done as a hop.
+JETPACK_HOP_DURATION = 90            # Frames of joyful hover (~1.5s).
+JOY_FLY_THRUST = 0.35               # Up/down thrust per frame during the hop.
+
 # Capturing the cursor: after landing hits_to_win clean blows he pounces, pins
 # the pointer for a beat (celebrating), then flings it across the screen and
 # does a little victory dance before calming down.

@@ -103,6 +103,9 @@ from config import (
     FLY_HOVER_RANGE,
     FLY_FLAME_CHANCE,
     REACH_FAILS_TO_RANGED,
+    JETPACK_HOP_CHANCE,
+    JETPACK_HOP_DURATION,
+    JOY_FLY_THRUST,
     RAGE_MIN_DURATION,
     RAGE_MAX_DURATION,
     RAGE_HITS_TO_CALM,
@@ -213,6 +216,11 @@ class Pet:
         self.fly_vy = 0.0
         self._hits_at_launch = 0
         self.reach_fails = 0
+        # Playful (non-combat) jetpack hop: occasionally taken instead of a jump.
+        self.joy_flying = False
+        self.joy_fly_timer = 0
+        self.joy_fly_vx = 0.0
+        self.joy_fly_vy = 0.0
         # Cursor capture. The finale pins the pointer (cursor_lock: the main loop
         # warps to this every frame until released), then flings it once
         # (cursor_grab: one-shot warp target). Individual hits also knock the
@@ -689,6 +697,7 @@ class Pet:
         self.rage_timer = RAGE_DURATION
         self.rage_age = 0
         self.reach_fails = 0
+        self.joy_flying = False
         self.weapon = self.weapon_pref or random.choice(WEAPONS)
         self._reset_combat()
         self.following = False
@@ -834,6 +843,7 @@ class Pet:
         self.curious = False
         self.following = False
         self.courting = False
+        self.joy_flying = False
         self.loved = False
         self.spawn_particles("sweat", random.randint(2, 3))
         self.start_talk(random.choice(SCARED_PHRASES))
@@ -1150,6 +1160,58 @@ class Pet:
         self.state = State.JUMP
         self.jump_vy = max(0.0, self.fly_vy)
         self.vx = self.fly_vx * 0.5
+        self.spawn_particles("dust", 2)
+
+    # -- Playful jetpack hop (non-combat) ----------------------------------
+
+    def _start_joy_flight(self):
+        """Fire the jetpack for fun: a little liftoff, then a drifting hover."""
+        self.joy_flying = True
+        self.joy_fly_timer = JETPACK_HOP_DURATION
+        self.joy_fly_vx = self.vx if abs(self.vx) > 0.3 else random.uniform(-2.0, 2.0)
+        self.joy_fly_vy = FLY_LIFTOFF_VY
+        self.airborne = True
+        self.state = State.JUMP
+        self.jump_vy = 0.0
+        self.jump_cooldown = 30
+        self.spawn_particles("dust", 3)
+        self.spawn_particles("flame", 2)
+
+    def _update_joy_flight(self, platforms):
+        """Float up, drift sideways trailing exhaust, then ease off the thrust and
+        fall back into normal gravity so he always lands."""
+        self.joy_fly_timer -= 1
+        # Thrust up for the first part of the hop, then ease off so he settles.
+        if self.joy_fly_timer > JETPACK_HOP_DURATION * 0.4:
+            self.joy_fly_vy -= JOY_FLY_THRUST
+        else:
+            self.joy_fly_vy += JOY_FLY_THRUST * 0.6
+        self.joy_fly_vy = max(-FLY_MAX_SPEED, min(FLY_MAX_SPEED, self.joy_fly_vy))
+        # Occasionally nudge the drift so the hover isn't a dead-straight line.
+        if random.random() < 0.03:
+            self.joy_fly_vx = random.uniform(-2.0, 2.0)
+        self.x += self.joy_fly_vx
+        self.y += self.joy_fly_vy
+        if abs(self.joy_fly_vx) > 0.1:
+            self.facing_right = self.joy_fly_vx > 0
+        if random.random() < FLY_FLAME_CHANCE:
+            self._add_particle(
+                "flame", self.x + WINDOW_W / 2, self.y + WINDOW_H,
+                random.uniform(-0.6, 0.6), random.uniform(0.6, 1.8),
+                random.randint(6, 12), grav=0.02,
+            )
+        self._clamp_position()
+        if self.joy_fly_timer <= 0:
+            self._end_joy_flight()
+
+    def _end_joy_flight(self):
+        """Cut the engine and drop into normal gravity to land."""
+        self.joy_flying = False
+        self.fly_cooldown = FLY_COOLDOWN
+        self.airborne = True
+        self.state = State.JUMP
+        self.jump_vy = max(0.0, self.joy_fly_vy)
+        self.vx = self.joy_fly_vx * 0.6
         self.spawn_particles("dust", 2)
 
     def _start_attack(self, mouse, stats):
@@ -1582,6 +1644,8 @@ class Pet:
         self.following = False
         self.socializing = False
         self.courting = False
+        self.joy_flying = False
+        self.flying = False
         if self.talking:
             self._stop_talking(repick=False)
         cx = self.x + WINDOW_W / 2
@@ -1694,6 +1758,17 @@ class Pet:
                 self.start_jump()
 
     def start_jump(self, target=None):
+        # Now and then, for a free-form hop (no window target) while he's calm,
+        # fire the jetpack for fun instead — floats up and drifts before landing.
+        if (
+            target is None
+            and not self.rage
+            and not self.joy_flying
+            and self.fly_cooldown == 0
+            and random.random() < JETPACK_HOP_CHANCE
+        ):
+            self._start_joy_flight()
+            return
         self.state = State.JUMP
         self.airborne = True
         self.jump_target = target
@@ -1763,6 +1838,12 @@ class Pet:
                 self.spawn_particles(random.choice(["star", "heart", "anger"]), 1)
             if self.lock_timer <= 0:
                 self._release_cursor()
+            return
+
+        # Playful jetpack hop runs itself (movement + landing hand-off), like a
+        # tumble; skip the rest of the brain while it's aloft.
+        if self.joy_flying:
+            self._update_joy_flight(platforms)
             return
 
         if self.tumbling:
@@ -1965,6 +2046,7 @@ class Pet:
         self.vx = 0.0
         self.vy = 0.0
         self.jump_vy = 0.0
+        self.joy_flying = False
         self.airborne = False
         self.platform = None
         self.jump_target = None
