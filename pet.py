@@ -526,9 +526,13 @@ class Pet:
         self.excited_hold = max(0, self.excited_hold - 1)
 
         calm = not self.rage and not self.angry
+        # On a call he stays engaged: never dozes off or gets bored even if you
+        # aren't touching the keyboard/mouse while listening.
+        on_call = self.activity == "call"
         want_sleep = (
             idle_seconds >= AFK_SLEEP_SECONDS
             and calm
+            and not on_call
             and not self.airborne
             and not self.tumbling
         )
@@ -566,6 +570,7 @@ class Pet:
         self.bored = (
             not self.excited
             and calm
+            and not on_call
             and BORED_SECONDS <= idle_seconds < AFK_SLEEP_SECONDS
         )
 

@@ -50,8 +50,8 @@ from config import (
     LAPTOP_LOGO,
     NOTE_COLOR,
     PARTICLE_SCALE,
-    PHONE_BODY,
-    PHONE_SCREEN,
+    MIC_BOOM,
+    MIC_FOAM,
     PET_COLOR,
     PET_SHADE,
     POOF_COLOR,
@@ -697,19 +697,24 @@ def _draw_headphones(small, body_y):
     rect(small, 14, body_y + 1, 2, 4, HEADPHONE_CUP)
 
 
-def _draw_phone(small, body_y, frame):
-    """A smartphone held up to the pet's ear during a call, screen glowing, with
-    a couple of little sound waves blinking beside it."""
-    ear_x = 14
-    for dy in range(0, 5):
-        px(small, ear_x, body_y + dy, PHONE_BODY)
-        px(small, ear_x + 1, body_y + dy, PHONE_BODY)
-    px(small, ear_x, body_y + 1, PHONE_SCREEN)
-    px(small, ear_x, body_y + 2, PHONE_SCREEN)
-    # Blinking sound waves off the earpiece.
-    if (frame // 12) % 2 == 0:
-        px(small, ear_x + 3, body_y, PHONE_SCREEN)
-        px(small, ear_x + 3, body_y + 2, PHONE_SCREEN)
+def _draw_headset(small, body_y):
+    """A headset worn on a call: a band with cushioned ear cups plus a mic boom
+    curving from the front cup down to a foam tip in front of the mouth."""
+    # Band over the head.
+    for x in range(6, 14):
+        px(small, x, body_y - 1, HEADPHONE_BAND)
+    px(small, 5, body_y, HEADPHONE_BAND)
+    px(small, 14, body_y, HEADPHONE_BAND)
+    # Cushioned ear cups over both ears.
+    rect(small, 4, body_y + 1, 2, 4, HEADPHONE_CUP)
+    rect(small, 14, body_y + 1, 2, 4, HEADPHONE_CUP)
+    # Mic boom arm curving from the front (right) cup toward the mouth.
+    px(small, 16, body_y + 4, MIC_BOOM)
+    px(small, 16, body_y + 5, MIC_BOOM)
+    px(small, 15, body_y + 6, MIC_BOOM)
+    px(small, 14, body_y + 7, MIC_BOOM)
+    # Foam mic tip in front of the mouth.
+    rect(small, 12, body_y + 7, 2, 2, MIC_FOAM)
 
 
 def _draw_popcorn(small, body_y):
@@ -910,7 +915,7 @@ def draw_pet_frame(pet):
     if calm:
         activity = getattr(pet, "activity", None)
         if activity == "call":
-            _draw_phone(small, body_y, pet.frame)
+            _draw_headset(small, body_y)
         elif activity == "work":
             _draw_laptop(small, body_y, pet.frame)
         elif activity == "video":

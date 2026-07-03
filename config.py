@@ -130,8 +130,8 @@ POPCORN_STRIPE = (246, 246, 246, 255)
 POPCORN_KERNEL = (250, 226, 130, 255)
 HEADPHONE_BAND = (52, 56, 68, 255)
 HEADPHONE_CUP = (74, 80, 96, 255)
-PHONE_BODY = (44, 48, 58, 255)          # Smartphone held to the ear on a call.
-PHONE_SCREEN = (120, 210, 255, 255)     # Lit screen glow.
+MIC_BOOM = (52, 56, 68, 255)            # Headset mic boom arm (worn on a call).
+MIC_FOAM = (236, 92, 88, 255)           # Mic foam tip (a warm "live" accent).
 
 # Mouse interaction --------------------------------------------------------
 FOLLOW_CHANCE = 0.004                # Per-frame chance to start chasing the cursor.
