@@ -235,8 +235,9 @@ def main():
 
     pygame.init()
     primary = MacOverlay(WINDOW_W, WINDOW_H, interactive=True, with_menu=True)
-    # Window titles (used to spot a YouTube tab in any browser) need Screen
-    # Recording permission; prompt once if it hasn't been decided yet.
+    # Window titles (used to spot a YouTube/Meet tab in a browser) need Screen
+    # Recording permission. We only check whether it's already granted — we never
+    # prompt for it, so first launch and post-update relaunches stay quiet.
     primary.ensure_screen_recording()
     display_rects, bounds = primary.refresh_displays()
     window_tracker = WindowTracker(display_rects, bounds)

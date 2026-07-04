@@ -68,6 +68,9 @@ class MacOverlay:
             name: _nsstring(self.objc, name)
             for name in ("kCGWindowLayer", "kCGWindowName", "kCGWindowOwnerName")
         }
+        # Whether Screen Recording is already granted (needed to read window
+        # titles). We never prompt for it — see ensure_screen_recording.
+        self._screen_recording_ok = False
         self.colorspace = self.cg.CGColorSpaceCreateDeviceRGB()
         self.nsapp = None
         self.status_item = None
@@ -141,11 +144,10 @@ class MacOverlay:
         cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
         cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
         # Screen Recording gate: window titles are only readable with it granted
-        # (10.15+). These may be absent on older macOS, hence the getattr guard.
+        # (10.15+). We only ever preflight (never request), so we bind just the
+        # preflight symbol; it may be absent on older macOS, hence the guard.
         if hasattr(cg, "CGPreflightScreenCaptureAccess"):
             cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
-        if hasattr(cg, "CGRequestScreenCaptureAccess"):
-            cg.CGRequestScreenCaptureAccess.restype = ctypes.c_bool
         # Input-activity queries for AFK sleep and typing energy.
         cg.CGEventSourceSecondsSinceLastEventType.restype = ctypes.c_double
         cg.CGEventSourceSecondsSinceLastEventType.argtypes = [
@@ -668,22 +670,24 @@ class MacOverlay:
         return bundle, name
 
     def ensure_screen_recording(self):
-        """Make sure we can read window titles, which is what lets us spot a
-        YouTube tab in any browser — including Firefox-based ones (Zen, etc.)
-        that expose no scriptable tab/URL API.
+        """Check (never prompt) whether Screen Recording is granted, which is
+        what lets us read window titles to spot a YouTube/Meet tab in a browser.
 
-        Titles are gated behind Screen Recording permission on macOS 10.15+.
-        Preflight, and prompt once if undecided. Returns True if already granted;
-        a fresh grant only takes effect after the app is restarted.
+        We deliberately do NOT call CGRequestScreenCaptureAccess: that modal is
+        intrusive and macOS re-triggers it after every update (the resigned
+        binary loses its TCC grant). Browser-tab detection is a minor nicety, so
+        it stays fully opt-in — the user can grant Screen Recording in System
+        Settings if they want it, and it takes effect on the next launch. Native
+        video/call apps and audio detection work without any of this.
+
+        Returns True if already granted (or pre-10.15, where titles are free).
         """
         preflight = getattr(self.cg, "CGPreflightScreenCaptureAccess", None)
-        request = getattr(self.cg, "CGRequestScreenCaptureAccess", None)
-        if preflight is None or request is None:
-            return True  # pre-10.15: titles are readable without permission
-        if preflight():
+        if preflight is None:
+            self._screen_recording_ok = True  # pre-10.15: titles readable freely
             return True
-        request()  # shows the system prompt only the first time it's undecided
-        return False
+        self._screen_recording_ok = bool(preflight())
+        return self._screen_recording_ok
 
     def active_window_title(self, owner_name=""):
         """Title of the frontmost normal (layer-0) on-screen window, or "".
@@ -692,8 +696,11 @@ class MacOverlay:
         window — so we read the focused browser's tab title rather than whatever
         window happens to sort on top — and fall back to the topmost window's
         title if none matches. Reading titles needs Screen Recording permission
-        on macOS 10.15+; without it they come back empty.
+        on macOS 10.15+; without it we skip the peek entirely so we never touch a
+        screen-capture API (which could re-arm the system prompt).
         """
+        if not self._screen_recording_ok:
+            return ""
         options = WINDOW_LIST_ON_SCREEN_ONLY | WINDOW_LIST_EXCLUDE_DESKTOP
         array = self.cg.CGWindowListCopyWindowInfo(options, 0)
         if not array:
