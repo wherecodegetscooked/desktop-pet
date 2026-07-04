@@ -41,25 +41,12 @@ from config import (
     GROUP_JOIN_CHANCE,
     GROUP_JOIN_ANGER,
     BABY_DEFENSE_RADIUS,
-    AIR_PLATFORM_ENABLE,
-    MAX_AIR_PLATFORMS,
-    AIR_PLATFORM_LIFE,
-    AIR_PLATFORM_FADE,
-    AIR_PLATFORM_COOLDOWN,
-    AIR_PLATFORM_CHANCE,
-    AIR_PLATFORM_W,
-    AIR_PLATFORM_H,
-    AIR_PLATFORM_BAND_MIN,
-    AIR_PLATFORM_BAND_MAX,
-    CLOUD_SURFACE_Y,
-    CLOUD_NAME,
     WINDOW_H,
     WINDOW_W,
 )
 from overlay import MacOverlay
 from pet import Pet
 from render import (
-    draw_air_platform,
     draw_ball,
     draw_flight_rig,
     draw_pet_frame,
@@ -282,10 +269,6 @@ def main():
     # removes it from the menu bar ("Remove ball").
     ball = None
     ball_overlay = None
-    # Conjured cloud platforms: temporary ledges a stuck pet spawns to hop onto
-    # (e.g. under a maximised window). Each entry: {plat, overlay, life, max}.
-    air_platforms = []
-    air_platform_cooldown = 0
     # Self-update: spawn update.sh, show a bubble briefly, then quit so it can
     # pull the latest and relaunch. Counts down frames before quitting.
     pending_update = 0
@@ -309,49 +292,6 @@ def main():
             entry["pet"].start_focus()
         pets.append(entry)
         return entry
-
-    def world_platforms():
-        """All platforms the pets can stand on this frame: real window edges plus
-        any temporary conjured clouds."""
-        return platforms + [ap["plat"] for ap in air_platforms]
-
-    def make_air_platform(pet):
-        """Conjure a temporary cloud ledge in the MIDDLE of the pet's display —
-        not at an edge — and biased toward screen centre while staying within the
-        pet's jump reach, with its own click-through overlay."""
-        cx = pet.x + WINDOW_W / 2
-        cy = pet.y + WINDOW_H / 2
-        disp = next(
-            (d for d in display_rects
-             if d["x"] <= cx < d["x"] + d["w"] and d["y"] <= cy < d["y"] + d["h"]),
-            {"x": bounds[0], "y": bounds[1],
-             "w": bounds[2] - bounds[0], "h": bounds[3] - bounds[1]},
-        )
-        # Vertical: land it in the middle band of the display.
-        py = int(disp["y"] + disp["h"] * random.uniform(AIR_PLATFORM_BAND_MIN,
-                                                        AIR_PLATFORM_BAND_MAX))
-        # Horizontal: keep it close to the pet so the (tall) leap reliably lands
-        # on it — a high jump reaches its full horizontal travel only back at the
-        # take-off height, so a far cloud gets undershot. A small nudge toward the
-        # display centre keeps it from hugging a wall. Clamped inside the display.
-        centre = disp["x"] + disp["w"] / 2
-        target = cx + (centre - cx) * 0.15 + random.uniform(-70, 70)
-        target = max(cx - 90, min(cx + 90, target))
-        px = int(target - AIR_PLATFORM_W / 2)
-        px = max(disp["x"], min(disp["x"] + disp["w"] - AIR_PLATFORM_W, px))
-        plat = {
-            "id": f"cloud:{time.monotonic()}:{random.randint(0, 9999)}",
-            "base_id": f"cloud:{random.randint(0, 999999)}",
-            "x": px, "y": py, "w": AIR_PLATFORM_W, "h": 1,
-            "name": CLOUD_NAME, "edge": "top",
-        }
-        overlay = MacOverlay(AIR_PLATFORM_W, AIR_PLATFORM_H, interactive=False)
-        overlay.move(px, py - CLOUD_SURFACE_Y)
-        air_platforms.append(
-            {"plat": plat, "overlay": overlay,
-             "life": AIR_PLATFORM_LIFE, "max": AIR_PLATFORM_LIFE}
-        )
-        return plat
 
     def release_entry(entry):
         """Tear down a culled pet's overlays. The menu window is kept alive
@@ -486,11 +426,10 @@ def main():
             display_rects, bounds = primary.refresh_displays()
             window_tracker.set_desktop(display_rects, bounds)
             platforms = window_tracker.platforms()
-            synced = world_platforms()
             for entry in pets:
                 entry["pet"].set_bounds(bounds)
                 if not entry["pet"].airborne:
-                    entry["pet"].sync_platforms(synced)
+                    entry["pet"].sync_platforms(platforms)
             if ball is not None:
                 ball.set_bounds(bounds)
             last_window_scan = now
@@ -529,26 +468,7 @@ def main():
             if target and not target["pet"].dying:
                 target["pet"].on_click(drag["clicks"], mouse)
 
-        # Age and cull conjured clouds; drop any pet left standing on a vanished
-        # one so it never floats in the empty air where a cloud used to be.
-        if air_platforms:
-            survivors = []
-            for ap in air_platforms:
-                ap["life"] -= 1
-                if ap["life"] <= 0:
-                    pid = ap["plat"]["id"]
-                    for entry in pets:
-                        pet = entry["pet"]
-                        if pet.platform and pet.platform.get("id") == pid:
-                            pet.drop()
-                    ap["overlay"].close()
-                else:
-                    survivors.append(ap)
-            air_platforms = survivors
-        if air_platform_cooldown > 0:
-            air_platform_cooldown -= 1
-
-        world = world_platforms()
+        world = platforms
 
         # Advance the fetch ball before the pets so they react to its new spot.
         if ball is not None:
@@ -568,20 +488,6 @@ def main():
             if not drag["dragging"]:
                 pet.observe_cursor(mouse)
             pet.update(world, mouse, ball)
-            # Stuck under a maximised window with nowhere to hop? Now and then he
-            # conjures a cloud mid-screen and leaps onto it.
-            if (
-                AIR_PLATFORM_ENABLE
-                and air_platform_cooldown == 0
-                and len(air_platforms) < MAX_AIR_PLATFORMS
-                and not pet.airborne
-                and random.random() < AIR_PLATFORM_CHANCE
-                and pet.needs_air_platform(world)
-            ):
-                plat = make_air_platform(pet)
-                pet.start_jump(plat)
-                pet.spawn_particles("star", 3)
-                air_platform_cooldown = AIR_PLATFORM_COOLDOWN
             # An enraged pet that caught the cursor either flings it once
             # (cursor_grab) or pins it in place each frame (cursor_lock).
             if pet.cursor_grab is not None:
@@ -703,26 +609,11 @@ def main():
         for entry in pets:
             render_pet(entry, display_rects)
 
-        # Draw conjured clouds, fading in on spawn and out as they expire.
-        for ap in air_platforms:
-            life, mx = ap["life"], ap["max"]
-            alpha = 255
-            if life < AIR_PLATFORM_FADE:
-                alpha = int(255 * life / AIR_PLATFORM_FADE)
-            grown = mx - life
-            if grown < AIR_PLATFORM_FADE:
-                alpha = min(alpha, int(255 * max(1, grown) / AIR_PLATFORM_FADE))
-            ap["overlay"].move(ap["plat"]["x"], ap["plat"]["y"] - CLOUD_SURFACE_Y)
-            ap["overlay"].show_surface(draw_air_platform(alpha))
-
         if ball is not None:
             ball_overlay.move(round(ball.x - BALL_WIN / 2), round(ball.y - BALL_WIN / 2))
             ball_overlay.show_surface(draw_ball())
 
         if now - last_reassert > 0.5:
-            # Clouds first so the pets (raised after) always sit in front of them.
-            for ap in air_platforms:
-                ap["overlay"].reassert_top()
             for entry in pets:
                 entry["overlay"].reassert_top()
                 entry["fx"].reassert_top()

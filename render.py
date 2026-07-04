@@ -76,11 +76,6 @@ from config import (
     BOW_WOOD_COLOR,
     BOW_WOOD_SHADE,
     BOW_STRING_COLOR,
-    AIR_PLATFORM_W,
-    AIR_PLATFORM_H,
-    CLOUD_COLOR,
-    CLOUD_SHADE,
-    CLOUD_OUTLINE,
     WEAPON_SCALE,
     WINDOW_H,
     WINDOW_W,
@@ -690,52 +685,6 @@ def draw_ball():
         ((BALL_WIN - sprite.get_width()) // 2, (BALL_WIN - sprite.get_height()) // 2),
     )
     return canvas
-
-
-_CLOUD_SPRITE = None
-
-
-def draw_air_platform(alpha=255):
-    """A chunky pixel-art cloud: soft-white body, light-grey shading, and a dark
-    1px (scaled) outline — drawn low-res and scaled up for the retro look. The
-    caller shifts it up by CLOUD_SURFACE_Y so the pet stands nestled on its top.
-    Cached at full opacity; a copy is faded for the spawn/despawn animation."""
-    global _CLOUD_SPRITE
-    if _CLOUD_SPRITE is None:
-        scale = 3
-        bw, bh = AIR_PLATFORM_W // scale, AIR_PLATFORM_H // scale  # 34 x 18
-        body = pygame.Surface((bw, bh), pygame.SRCALPHA)
-        body.fill(CLEAR)
-        # Puffy top from overlapping round lobes of different sizes so the top
-        # edge undulates into distinct bumps (rather than one smooth dome), over
-        # a flat-bottomed body.
-        lobes = [(7, 11, 4), (12, 8, 5), (19, 6, 7), (26, 9, 6), (30, 12, 3)]
-        for cx, cy, r in lobes:
-            pygame.draw.circle(body, CLOUD_COLOR, (cx, cy), r)
-        pygame.draw.rect(body, CLOUD_COLOR, (4, 10, bw - 8, bh - 10 - 2))
-        # Light-grey shading: a soft shadow under the belly and beneath the big
-        # bump to give the cloud a little form.
-        pygame.draw.rect(body, CLOUD_SHADE, (6, bh - 5, bw - 12, 2))
-        for cx, cy, r in ((17, 11, 3), (25, 12, 2)):
-            pygame.draw.circle(body, CLOUD_SHADE, (cx, cy), r)
-        # Dark outline: stamp the silhouette in the outline colour, nudged in
-        # every direction, behind the body.
-        mask = pygame.mask.from_surface(body)
-        silhouette = mask.to_surface(setcolor=CLOUD_OUTLINE, unsetcolor=(0, 0, 0, 0))
-        outlined = pygame.Surface((bw, bh), pygame.SRCALPHA)
-        outlined.fill(CLEAR)
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1),
-                       (-1, -1), (1, -1), (-1, 1), (1, 1)):
-            outlined.blit(silhouette, (dx, dy))
-        outlined.blit(body, (0, 0))
-        _CLOUD_SPRITE = pygame.transform.scale(
-            outlined, (bw * scale, bh * scale)
-        )
-    if alpha >= 255:
-        return _CLOUD_SPRITE
-    faded = _CLOUD_SPRITE.copy()
-    faded.set_alpha(alpha)
-    return faded
 
 
 def _draw_headphones(small, body_y):

@@ -2347,33 +2347,6 @@ class Pet:
         else:
             self.pick_state()
 
-    def needs_air_platform(self, platforms):
-        """True when he's calm and grounded but has nowhere elevated to hop to —
-        e.g. a maximised window leaves only the floor. The main loop uses this to
-        occasionally conjure a temporary cloud for him to leap onto."""
-        if (
-            self.rage or self.angry or self.scared or self.asleep
-            or self.airborne or self.dying or self.joy_flying
-            or self.following or self.socializing or self.courting
-            or self.focusing or self.curious or self.baby
-        ):
-            return False
-        if self.state not in (State.IDLE, State.WALK) or self.jump_cooldown > 0:
-            return False
-        foot = self._feet_x()
-        feet_y = self.y + WINDOW_H
-        for platform in platforms:
-            if platform["name"] == GROUND_PLATFORM_NAME:
-                continue
-            vertical = platform["y"] - feet_y
-            if (
-                -self.screen_h * MAX_TARGET_HEIGHT < vertical < -20
-                and abs((platform["x"] + platform["w"] * 0.5) - foot)
-                < self.screen_w * MAX_TARGET_DISTANCE
-            ):
-                return False  # already has a reachable ledge above
-        return True
-
     def _maybe_jump_to_window(self, platforms):
         if self.jump_cooldown > 0:
             return
