@@ -530,9 +530,13 @@ class MacOverlay:
     def show_surface(self, surface):
         if hasattr(surface, "premul_alpha"):
             surface = surface.premul_alpha()
+        # Genau eine Kopie: tobytes liefert das fertige BGRA/premultiplied-Layout.
+        # Das bytes-Objekt geht direkt als Datenpointer an CGDataProviderCreateWithData
+        # (c_void_p akzeptiert bytes); die frühere zweite from_buffer_copy-Kopie
+        # entfaellt. self.last_buffer haelt den Puffer am Leben, bis der naechste
+        # Frame ihn ersetzt (die Layer-Contents referenzieren ihn bis dahin).
         pixels = pygame.image.tobytes(surface, "BGRA")
-        buf = (ctypes.c_ubyte * len(pixels)).from_buffer_copy(pixels)
-        provider = self.cg.CGDataProviderCreateWithData(None, buf, len(pixels), None)
+        provider = self.cg.CGDataProviderCreateWithData(None, pixels, len(pixels), None)
         if not provider:
             return
 
@@ -557,7 +561,7 @@ class MacOverlay:
             _msg(self.objc, ca, "commit")
             self.cg.CGImageRelease(image)
         self.cg.CGDataProviderRelease(provider)
-        self.last_buffer = buf
+        self.last_buffer = pixels
 
     def pump_events(self):
         NSDate = self.objc.objc_getClass(b"NSDate")
