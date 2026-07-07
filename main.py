@@ -362,11 +362,13 @@ def main():
     breed_cooldown = 0
 
     # -- Pixel-Einstellungsfenster ----------------------------------------
+    # Ein normales, verschiebbares Fenster mit Titelleiste; der Pixel-Inhalt wird
+    # als Layer-Bild gezeichnet. Klicks kommen ueber einen Maus-Hook in
+    # Fensterkoordinaten rein (nicht als Pet-Drag).
     settings_overlay = None
     settings = None
     settings_open = False
-    settings_pos = (0, 0)
-    settings_prev_drag = False
+    settings_mouse = {"moved": False}
     next_pet_id = [0]
 
     def assign_pet_ids():
@@ -378,32 +380,60 @@ def main():
     def pet_entry_by_id(pid):
         return next((e for e in pets if e.get("id") == pid), None)
 
+    def on_settings_mouse(phase, wx, wy):
+        """Maus-Event auf dem Einstellungsfenster (Fensterkoordinaten, unten-links).
+        Wandelt in Panel-lokale Koordinaten (oben-links) und verteilt an das Panel.
+        Rueckgabe True = Event verschluckt; False = an AppKit (z.B. Titelleiste
+        zum Verschieben)."""
+        if settings is None:
+            return False
+        lx, ly = wx, settings_panel.PANEL_H - wy
+        in_content = (
+            0 <= lx < settings_panel.PANEL_W and 0 <= ly < settings_panel.PANEL_H
+        )
+        if phase == "down":
+            if not in_content:
+                return False  # Titelleiste/Rand -> AppKit verschiebt das Fenster
+            settings_mouse["moved"] = False
+            settings.on_grab((lx, ly))
+            return True
+        if phase == "drag":
+            if settings.active_slider is not None:
+                settings_mouse["moved"] = True
+                settings.on_drag((lx, ly))
+                return True
+            return False
+        if phase == "up":
+            settings.on_release()
+            if in_content and not settings_mouse["moved"]:
+                settings.on_click((lx, ly))
+                return True
+            return False
+        return False
+
     def open_settings():
-        """Das Pixel-Einstellungsfenster oeffnen (beim ersten Mal erzeugen) und
-        mittig auf dem Hauptbildschirm platzieren."""
-        nonlocal settings_overlay, settings, settings_open, settings_pos
+        """Das Einstellungsfenster oeffnen (beim ersten Mal erzeugen), mittig
+        platzieren und in den Vordergrund holen."""
+        nonlocal settings_overlay, settings, settings_open
         if settings_overlay is None:
-            settings_overlay = MacOverlay(
-                settings_panel.PANEL_W, settings_panel.PANEL_H, interactive=True
-            )
-            # Ein Level ueber Pets/Effekten, damit das Panel klar obenauf liegt.
-            settings_overlay.level += 1
             settings = settings_panel.SettingsPanel()
+            settings_overlay = MacOverlay(
+                settings_panel.PANEL_W, settings_panel.PANEL_H,
+                interactive=True, titled=True,
+            )
+            primary.set_mouse_hook(settings_overlay.window, on_settings_mouse)
         cx = (bounds[0] + bounds[2]) // 2 - settings_panel.PANEL_W // 2
         cy = (bounds[1] + bounds[3]) // 2 - settings_panel.PANEL_H // 2
-        settings_pos = (cx, cy)
-        settings_overlay.set_mouse_ignore(False)
         settings_overlay.move(cx, cy)
-        settings_overlay.reassert_top()
         settings.dirty = True
         settings_open = True
+        settings_overlay.activate()
 
     def close_settings():
         nonlocal settings_open
         settings_open = False
         if settings_overlay is not None:
             settings_overlay.close()
-            settings_overlay.set_mouse_ignore(True)
 
     def apply_settings_action(action):
         """Eine vom Panel gemeldete Pet-Aktion ausfuehren."""
@@ -592,34 +622,18 @@ def main():
                 entry["pet"].set_activity(context, music)
             last_activity_scan = now
 
-        # Einstellungsfenster: Maus/Drag/Klick verarbeiten, solange es offen ist.
-        # Zeigt der Cursor aufs Panel (oder wird gerade ein Slider gezogen),
-        # gehoert die Interaktion dem Panel — die Pet-Steuerung darunter pausiert.
-        settings_grab = False
+        # Einstellungsfenster: vom Panel gemeldete Aktionen ausfuehren und ein
+        # natives Schliessen (roter Fensterknopf) erkennen. Die Maus-Klicks selbst
+        # kommen ueber den Hook (on_settings_mouse) rein, nicht hier.
         if settings_open and settings is not None:
-            local = None
-            if mouse is not None:
-                local = (mouse[0] - settings_pos[0], mouse[1] - settings_pos[1])
-            inside = local is not None and 0 <= local[0] < settings_panel.PANEL_W \
-                and 0 <= local[1] < settings_panel.PANEL_H
-            dragging_now = drag["dragging"]
-            if local is not None:
-                if dragging_now and not settings_prev_drag and inside:
-                    settings.on_grab(local)
-                elif dragging_now and settings.active_slider is not None:
-                    settings.on_drag(local)
-                elif not dragging_now and settings_prev_drag:
-                    settings.on_release()
-                if drag["clicks"] and inside:
-                    settings.on_click(local)
-            settings_prev_drag = dragging_now
-            settings_grab = inside or settings.active_slider is not None
             for act in settings.pop_actions():
                 apply_settings_action(act)
+            if settings_overlay is not None and not settings_overlay.visible():
+                settings_open = False
 
         # Drag: only a gesture that actually moved counts as a drag, so a plain
         # click never sticks a pet as the drag target (which would freeze it).
-        if not settings_grab and drag["dragging"] and drag["moved"]:
+        if drag["dragging"] and drag["moved"]:
             if drag_target is None and drag["position"]:
                 drag_target = pet_under_point(pets, mouse)
             if drag_target and drag["position"]:
@@ -629,7 +643,7 @@ def main():
                 drag_target["pet"].release()
             drag_target = None
 
-        if drag["clicks"] and not settings_grab:
+        if drag["clicks"]:
             target = pet_under_point(pets, mouse) or (pets[0] if pets else None)
             if target and not target["pet"].dying:
                 target["pet"].on_click(drag["clicks"], mouse)
@@ -830,8 +844,6 @@ def main():
                 entry["fx"].reassert_top()
             if ball is not None:
                 ball_overlay.reassert_top()
-            if settings_open and settings_overlay is not None:
-                settings_overlay.reassert_top()
             last_reassert = now
 
         # After an update was requested, let the "Updating!" bubble show for a

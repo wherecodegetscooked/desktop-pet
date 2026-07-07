@@ -50,11 +50,20 @@ from objc_bridge import (
 
 
 class MacOverlay:
-    def __init__(self, width, height, interactive=True, with_menu=False):
+    def __init__(self, width, height, interactive=True, with_menu=False,
+                 titled=False):
         self.width = width
         self.height = height
         self.interactive = interactive
         self.with_menu = with_menu
+        # titled=True: ein normales, verschiebbares Fenster mit Titelleiste
+        # (statt des randlosen, klick-durchlaessigen Overlay-Panels). Fuer das
+        # Einstellungsfenster.
+        self.titled = titled
+        # Optionaler Maus-Hook: (fenster_ptr, callback). Wird beim Event-Pump
+        # geprueft — Events auf genau diesem Fenster gehen (in Fensterkoordinaten)
+        # an das Callback, statt als Pet-Drag interpretiert zu werden.
+        self.mouse_hook = None
         # Filled by the status-bar menu callbacks; drained by consume_menu_actions.
         self.menu_actions = []
         self.menu_controller = None
@@ -179,42 +188,71 @@ class MacOverlay:
             restype=ctypes.c_bool,
         )
 
-        rect = NSRect(NSPoint(200, 200), NSSize(self.width, self.height))
-        style = NS_WINDOW_STYLE_BORDERLESS | NS_WINDOW_STYLE_NONACTIVATING_PANEL
-        panel = _msg(objc, NSPanel, "alloc")
-        self.window = _msg(
-            objc,
-            panel,
-            "initWithContentRect:styleMask:backing:defer:",
-            rect,
-            style,
-            NS_BACKING_STORE_BUFFERED,
-            False,
-            argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool],
-        )
-
         clear = _msg(objc, NSColor, "clearColor")
-        _msg(objc, self.window, "setOpaque:", False, argtypes=[ctypes.c_bool])
-        _msg(objc, self.window, "setBackgroundColor:", clear)
-        _msg(objc, self.window, "setHasShadow:", False, argtypes=[ctypes.c_bool])
-        _msg(
-            objc,
-            self.window,
-            "setIgnoresMouseEvents:",
-            not self.interactive,
-            argtypes=[ctypes.c_bool],
-        )
-        _msg(objc, self.window, "setCanHide:", False, argtypes=[ctypes.c_bool])
-        _msg(objc, self.window, "setReleasedWhenClosed:", False, argtypes=[ctypes.c_bool])
-        _msg(objc, self.window, "setAlphaValue:", 1.0, argtypes=[ctypes.c_double])
+        rect = NSRect(NSPoint(200, 200), NSSize(self.width, self.height))
 
-        behavior = (
-            NS_WINDOW_COLLECTION_CAN_JOIN_ALL_SPACES
-            | NS_WINDOW_COLLECTION_IGNORES_CYCLE
-            | NS_WINDOW_COLLECTION_FULLSCREEN_AUXILIARY
-        )
-        _msg(objc, self.window, "setCollectionBehavior:", behavior, argtypes=[ctypes.c_ulong])
-        self.reassert_top()
+        if self.titled:
+            # Normales, verschiebbares Fenster mit Titelleiste (Einstellungen).
+            NSWindow = objc.objc_getClass(b"NSWindow")
+            NS_TITLED, NS_CLOSABLE, NS_MINI = 1 << 0, 1 << 1, 1 << 2
+            style = NS_TITLED | NS_CLOSABLE | NS_MINI
+            win = _msg(objc, NSWindow, "alloc")
+            self.window = _msg(
+                objc,
+                win,
+                "initWithContentRect:styleMask:backing:defer:",
+                rect,
+                style,
+                NS_BACKING_STORE_BUFFERED,
+                False,
+                argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool],
+            )
+            _msg(objc, self.window, "setTitle:",
+                 _nsstring(objc, "Desktop Pet – Einstellungen"))
+            _msg(objc, self.window, "setReleasedWhenClosed:", False,
+                 argtypes=[ctypes.c_bool])
+            # Etwas ueber den Pets, damit es nicht verdeckt wird, aber ganz normal
+            # anklick- und verschiebbar.
+            _msg(objc, self.window, "setLevel:", self.level + 1,
+                 argtypes=[ctypes.c_long])
+            _msg(objc, self.window, "setCollectionBehavior:",
+                 NS_WINDOW_COLLECTION_CAN_JOIN_ALL_SPACES, argtypes=[ctypes.c_ulong])
+        else:
+            style = NS_WINDOW_STYLE_BORDERLESS | NS_WINDOW_STYLE_NONACTIVATING_PANEL
+            panel = _msg(objc, NSPanel, "alloc")
+            self.window = _msg(
+                objc,
+                panel,
+                "initWithContentRect:styleMask:backing:defer:",
+                rect,
+                style,
+                NS_BACKING_STORE_BUFFERED,
+                False,
+                argtypes=[NSRect, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_bool],
+            )
+            _msg(objc, self.window, "setOpaque:", False, argtypes=[ctypes.c_bool])
+            _msg(objc, self.window, "setBackgroundColor:", clear)
+            _msg(objc, self.window, "setHasShadow:", False, argtypes=[ctypes.c_bool])
+            _msg(
+                objc,
+                self.window,
+                "setIgnoresMouseEvents:",
+                not self.interactive,
+                argtypes=[ctypes.c_bool],
+            )
+            _msg(objc, self.window, "setCanHide:", False, argtypes=[ctypes.c_bool])
+            _msg(objc, self.window, "setReleasedWhenClosed:", False,
+                 argtypes=[ctypes.c_bool])
+            _msg(objc, self.window, "setAlphaValue:", 1.0, argtypes=[ctypes.c_double])
+
+            behavior = (
+                NS_WINDOW_COLLECTION_CAN_JOIN_ALL_SPACES
+                | NS_WINDOW_COLLECTION_IGNORES_CYCLE
+                | NS_WINDOW_COLLECTION_FULLSCREEN_AUXILIARY
+            )
+            _msg(objc, self.window, "setCollectionBehavior:", behavior,
+                 argtypes=[ctypes.c_ulong])
+            self.reassert_top()
 
         view = _msg(objc, self.window, "contentView")
         _msg(objc, view, "setWantsLayer:", True, argtypes=[ctypes.c_bool])
@@ -440,6 +478,24 @@ class MacOverlay:
             argtypes=[ctypes.c_bool],
         )
 
+    def set_mouse_hook(self, window, callback):
+        """Events auf `window` (Fenster-Ptr) an `callback(phase, x, y)` leiten,
+        phase in {down, drag, up}, x/y in Fensterkoordinaten (unten-links). Das
+        Callback gibt True zurueck, wenn es das Event verschluckt. Für das
+        Einstellungsfenster: dessen Klicks werden so verarbeitet statt als Pet."""
+        self.mouse_hook = (window, callback)
+
+    def activate(self):
+        """Die App nach vorn holen und dieses Fenster zum Key-Fenster machen —
+        noetig, damit ein normales Fenster einer Menuebar-App Klicks/Tastatur
+        bekommt und im Vordergrund liegt."""
+        _msg(self.objc, self.nsapp, "activateIgnoringOtherApps:", True,
+             argtypes=[ctypes.c_bool])
+        _msg(self.objc, self.window, "makeKeyAndOrderFront:", None)
+
+    def visible(self):
+        return bool(_msg(self.objc, self.window, "isVisible", restype=ctypes.c_bool))
+
     def should_quit(self):
         window_visible = _msg(self.objc, self.window, "isVisible", restype=ctypes.c_bool)
         if window_visible:
@@ -593,6 +649,25 @@ class MacOverlay:
 
     def _handle_mouse_event(self, event, NSEvent):
         event_type = _msg(self.objc, event, "type", restype=ctypes.c_ulong)
+
+        # Gehoert das Event dem Hook-Fenster (Einstellungen)? Dann in
+        # Fensterkoordinaten ans Callback geben, nicht als Pet-Drag deuten.
+        if self.mouse_hook is not None:
+            hook_win, callback = self.mouse_hook
+            ev_win = _msg(self.objc, event, "window")
+            if ev_win and ev_win == hook_win:
+                phase = {
+                    NSEVENT_LEFT_MOUSE_DOWN: "down",
+                    NSEVENT_LEFT_MOUSE_DRAGGED: "drag",
+                    NSEVENT_LEFT_MOUSE_UP: "up",
+                }.get(event_type)
+                if phase is None:
+                    return False  # z.B. Titelleisten-Klick -> AppKit macht den Rest
+                loc = _msg(self.objc, event, "locationInWindow", restype=NSPoint)
+                # True = verschluckt (kein sendEvent); False = an AppKit weiter
+                # (Fenster verschieben), aber nie als Pet-Drag behandelt.
+                return bool(callback(phase, loc.x, loc.y))
+
         if event_type == NSEVENT_LEFT_MOUSE_DOWN:
             self.dragging = True
             self.drag_released = False
