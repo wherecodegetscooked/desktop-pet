@@ -15,8 +15,10 @@ import os
 
 import pygame
 
+import breeding
 import config
 import persistence
+from config import WEAPONS
 from render import render_pixel_text, GLYPH_H, SPACE_W, GLYPH_GAP, GLYPH_W
 
 
@@ -126,6 +128,7 @@ class SettingsPanel:
         }
         self.tab = TABS[0]
         self.active_slider = None      # key des gerade gezogenen Sliders
+        self.breed_selection = []      # bis zu 2 Pet-ids fuers gezielte Zuchten
         self._actions = []             # (typ, *args) fuer main
         self._widgets = []
         self._tracks = {}
@@ -218,6 +221,16 @@ class SettingsPanel:
                 if self.tab != w["tab"]:
                     self.tab = w["tab"]
                     self.dirty = True
+            elif kind == "select":
+                pid = w["pet_id"]
+                if pid in self.breed_selection:
+                    self.breed_selection.remove(pid)
+                elif len(self.breed_selection) < 2:
+                    self.breed_selection.append(pid)
+                else:
+                    # Aeltere Auswahl weiterschieben, hoechstens zwei aktiv.
+                    self.breed_selection = [self.breed_selection[1], pid]
+                self.dirty = True
             elif kind == "button":
                 self._do_button(w["action"])
             return
@@ -242,10 +255,12 @@ class SettingsPanel:
 
     def _do_button(self, action):
         if action == ("save",):
-            self.save()
-        else:
-            # An main weiterreichen (close/recolour/rename/remove/remove_all/new_pet).
-            self._actions.append(action)
+            self.save()  # prefs.json schreiben + Bestaetigung
+        elif action[0] == "breed":
+            self.breed_selection = []  # Auswahl nach dem Zuchten zuruecksetzen
+        # Immer an main melden — fuer Save, damit es live angewandt wird, sonst
+        # fuer close/recolour/rename/remove/remove_all/new_pet/breed.
+        self._actions.append(action)
 
     # -- Widget-Layout (fuer Zeichnen UND Hit-Testing) ---------------------
 
@@ -298,32 +313,52 @@ class SettingsPanel:
             y += rh
         return widgets
 
+    PET_ROWS = 5
+    PET_ROW_Y = 128
+    PET_ROW_H = 36
+
     def _build_pet_widgets(self):
         widgets = []
-        y = 100
-        rh = 46
-        shown = self.pets[:7]
-        for pet in shown:
+        # Auswahl auf noch existierende Pets beschraenken.
+        alive = {p["id"] for p in self.pets}
+        self.breed_selection = [i for i in self.breed_selection if i in alive]
+
+        # Toolbar oben: neuer Pet / alle entfernen.
+        widgets.append({"kind": "button", "action": ("new_pet",),
+                        "rect": (16, 96, 132, 26),
+                        "label": "Neuer Pet", "style": "accent"})
+        widgets.append({"kind": "button", "action": ("remove_all",),
+                        "rect": (156, 96, 150, 26),
+                        "label": "Alle entfernen", "style": "danger"})
+
+        y = self.PET_ROW_Y
+        for pet in self.pets[:self.PET_ROWS]:
+            # Aktions-Buttons rechts (zuerst -> werden vor der Auswahl getroffen).
             bx = self.W - 16
             for label, action, style in (
                 ("Weg", ("remove", pet["id"]), "danger"),
                 ("Name", ("rename", pet["id"]), "muted"),
                 ("Farbe", ("recolour", pet["id"]), "muted"),
             ):
-                bw = _text_width_scaled(label, 2) + 22
+                bw = _text_width_scaled(label, 2) + 18
                 bx -= bw
                 widgets.append({"kind": "button", "action": action,
-                                "rect": (bx, y + 8, bw, 26),
+                                "rect": (bx, y + 5, bw, 24),
                                 "label": label, "style": style})
-                bx -= 8
-            y += rh
-        # Aktionen unten.
-        widgets.append({"kind": "button", "action": ("new_pet",),
-                        "rect": (16, self.H - 92, 150, 28),
-                        "label": "Neuer Pet", "style": "accent"})
-        widgets.append({"kind": "button", "action": ("remove_all",),
-                        "rect": (176, self.H - 92, 170, 28),
-                        "label": "Alle entfernen", "style": "danger"})
+                bx -= 6
+            # Rest der Zeile = Auswahl fuers Zuchten.
+            widgets.append({"kind": "select", "pet_id": pet["id"],
+                            "rect": (16, y, bx - 16, self.PET_ROW_H - 4)})
+            y += self.PET_ROW_H
+
+        # Zuchten-Button, sobald genau zwei ausgewaehlt sind.
+        if len(self.breed_selection) == 2:
+            widgets.append({
+                "kind": "button",
+                "action": ("breed", self.breed_selection[0], self.breed_selection[1]),
+                "rect": (self.W - 150, self.H - 92, 134, 30),
+                "label": "Zuchten", "style": "accent",
+            })
         return widgets
 
     # -- Zeichnen ----------------------------------------------------------
@@ -418,44 +453,105 @@ class SettingsPanel:
                    tr[0] + tr[2] // 2, tr[1] + 7,
                    BG if on else MUTED, ts=1, align="center")
 
+    def _pet_by_id(self, pid):
+        return next((p for p in self.pets if p["id"] == pid), None)
+
     def _draw_pets(self, surf):
         if not self.pets:
-            _blit_text(surf, "Keine Pets da.", self.W // 2, 150, MUTED, ts=2,
+            _blit_text(surf, "Keine Pets da.", self.W // 2, 200, MUTED, ts=2,
                        align="center")
-        y = 100
-        rh = 46
-        for pet in self.pets[:7]:
-            rect = (16, y, self.W - 32, rh - 8)
-            _panel_box(surf, rect, CARD, BORDER, 1)
+        y = self.PET_ROW_Y
+        for pet in self.pets[:self.PET_ROWS]:
+            selected = pet["id"] in self.breed_selection
+            rect = (16, y, self.W - 32, self.PET_ROW_H - 4)
+            _panel_box(surf, rect, CARD_HI if selected else CARD,
+                       ACCENT if selected else BORDER, 2 if selected else 1)
             sw = PALETTE_SWATCH[pet["palette_index"] % len(PALETTE_SWATCH)]
-            _panel_box(surf, (rect[0] + 10, y + 10, 18, 18), sw, BORDER, 1)
-            name = pet["name"] + (" (Baby)" if pet.get("baby") else "")
-            _blit_text(surf, name, rect[0] + 38, y + 8, TEXT, ts=2)
+            _panel_box(surf, (rect[0] + 10, y + 8, 16, 16), sw, BORDER, 1)
+            name = pet["name"]
+            if len(name) > 12:
+                name = name[:11] + "."
+            if pet.get("baby"):
+                name += " (Baby)"
+            _blit_text(surf, name, rect[0] + 34, y + 4, TEXT, ts=2)
             gen = pet["generation"]
             gtxt = "wild" if gen == 0 else f"Gen {gen}"
-            _blit_text(surf, gtxt, rect[0] + 38, y + 24, MUTED, ts=1)
-            y += rh
-        if len(self.pets) > 7:
-            _blit_text(surf, f"+ {len(self.pets) - 7} weitere",
-                       self.W // 2, y + 4, MUTED, ts=1, align="center")
+            weap = (pet.get("weapon") or "?").upper()
+            _blit_text(surf, f"{gtxt}  {weap}", rect[0] + 34, y + 20, MUTED, ts=1)
+            if selected:
+                idx = self.breed_selection.index(pet["id"]) + 1
+                _blit_text(surf, f"{idx}", rect[0] + rect[2] - 200, y + 9,
+                           ACCENT, ts=2, align="center")
+            y += self.PET_ROW_H
+        if len(self.pets) > self.PET_ROWS:
+            _blit_text(surf,
+                       f"+ {len(self.pets) - self.PET_ROWS} weitere "
+                       f"(die ersten {self.PET_ROWS} steuerbar)",
+                       self.W // 2, y + 2, MUTED, ts=1, align="center")
+
+        self._draw_breed_preview(surf)
         # Alle Buttons dieses Tabs zeichnen (Footer-Buttons macht _draw_footer).
         for w in self._widgets:
             if w["kind"] == "button" and w["action"] not in (("save",), ("close",)):
                 self._draw_button(surf, w)
 
+    def _draw_breed_preview(self, surf):
+        """Zeigt fuer zwei ausgewaehlte Eltern die Wahrscheinlichkeiten, welche
+        Farbe und Waffe das Kind bekommt."""
+        box = (16, 314, self.W - 32, self.H - 314 - 58)
+        _panel_box(surf, box, CARD, BORDER, 1)
+        bx, by, bw, bh = box
+        sel = self.breed_selection
+        if len(sel) < 2:
+            _blit_text(surf, "Zwei Pets anklicken, um Eltern zu waehlen",
+                       self.W // 2, by + bh // 2 - 6, MUTED, ts=2, align="center")
+            return
+        a, b = self._pet_by_id(sel[0]), self._pet_by_id(sel[1])
+        if a is None or b is None:
+            return
+        _blit_text(surf, f"Zucht-Vorschau: {a['name']} + {b['name']}",
+                   bx + 14, by + 8, TEXT, ts=2)
+
+        col_dist = breeding.color_distribution(a["palette_index"], b["palette_index"])
+        wpn_dist = breeding.weapon_distribution(
+            a.get("weapon") or WEAPONS[0], b.get("weapon") or WEAPONS[0]
+        )
+        top_colors = sorted(col_dist.items(), key=lambda kv: -kv[1])[:4]
+        top_weapons = sorted(wpn_dist.items(), key=lambda kv: -kv[1])[:4]
+
+        col_x = bx + 16
+        wpn_x = bx + bw // 2 + 10
+        row_y = by + 32
+        _blit_text(surf, "Farbe", col_x, row_y, ACCENT, ts=1)
+        _blit_text(surf, "Waffe", wpn_x, row_y, ACCENT, ts=1)
+        row_y += 16
+        for i in range(max(len(top_colors), len(top_weapons))):
+            ry = row_y + i * 18
+            if i < len(top_colors):
+                idx, p = top_colors[i]
+                _panel_box(surf, (col_x, ry, 14, 14),
+                           PALETTE_SWATCH[idx % len(PALETTE_SWATCH)], BORDER, 1)
+                _blit_text(surf, f"{round(p * 100)}%", col_x + 22, ry, TEXT, ts=1)
+            if i < len(top_weapons):
+                wname, p = top_weapons[i]
+                _blit_text(surf, wname.upper(), wpn_x, ry, TEXT, ts=1)
+                _blit_text(surf, f"{round(p * 100)}%", wpn_x + 110, ry, MUTED,
+                           ts=1, align="right")
+
     def _draw_tree(self, surf):
-        """Stammbaum als verbundene Kaestchen: Fokus-Pet oben, Eltern und
-        Grosseltern darunter, mit Verbindungslinien."""
+        """Stammbaum als verbundene Kaestchen: Eltern/Ahnen OBEN, das gewaehlte
+        Pet UNTEN, mit Verbindungslinien. Speist sich aus dem vollstaendigen
+        Familienregister, also auch verstorbene Ahnen erscheinen."""
         if not self.focus_name:
-            _blit_text(surf, "Kein Pet ausgewaehlt.", self.W // 2, 160, MUTED,
+            _blit_text(surf, "Kein Pet ausgewaehlt.", self.W // 2, 200, MUTED,
                        ts=2, align="center")
             return
-        _blit_text(surf, f"Ahnen von {self.focus_name}", self.W // 2, 92, TEXT,
+        _blit_text(surf, f"Stammbaum: {self.focus_name}", self.W // 2, 100, TEXT,
                    ts=2, align="center")
 
-        # Bis zu drei Ebenen (Fokus, Eltern, Grosseltern).
+        # Ahnen-Ebenen aufbauen (Ebene 0 = Fokus-Pet, dann Eltern, Grosseltern …).
         levels = [[self.focus_name]]
-        for _ in range(2):
+        for _ in range(5):
             nxt = []
             for name in levels[-1]:
                 _gen, parents = self.lineage.get(name, (None, []))
@@ -464,45 +560,46 @@ class SettingsPanel:
                 break
             levels.append(nxt)
 
-        top = 130
-        row_h = (self.H - top - 70) // max(1, len(levels))
-        positions = {}   # (level, idx) -> (cx, cy)
+        n_levels = len(levels)
+        top, bottom = 126, self.H - 64
+        row_h = (bottom - top) // max(1, n_levels)
+        positions = {}
         for li, names in enumerate(levels):
-            cy = top + row_h * li + 20
+            # Invertiert: Ebene 0 (Kind) unten, hoehere Ebenen (Ahnen) oben.
+            cy = bottom - li * row_h - row_h // 2
             n = len(names)
             for i, name in enumerate(names):
                 cx = int(self.W * (i + 1) / (n + 1))
                 positions[(li, i)] = (cx, cy)
 
-        # Verbindungslinien Kind -> Eltern (Eltern in Reihenfolge angehaengt).
-        for li in range(len(levels) - 1):
-            child_names = levels[li]
-            parent_cursor = 0
-            for ci, cname in enumerate(child_names):
+        # Verbindungslinien Kind (unten) -> Eltern (darueber).
+        for li in range(n_levels - 1):
+            cursor = 0
+            for ci, cname in enumerate(levels[li]):
                 _gen, parents = self.lineage.get(cname, (None, []))
                 cx, cy = positions[(li, ci)]
                 for _p in parents:
-                    if (li + 1, parent_cursor) in positions:
-                        px, py = positions[(li + 1, parent_cursor)]
-                        pygame.draw.line(surf, BORDER, (cx, cy + 16), (px, py - 16), 2)
-                    parent_cursor += 1
+                    if (li + 1, cursor) in positions:
+                        px, py = positions[(li + 1, cursor)]
+                        pygame.draw.line(surf, BORDER, (cx, cy - 14), (px, py + 14), 2)
+                    cursor += 1
 
-        # Kaestchen zeichnen.
         for li, names in enumerate(levels):
+            n = len(names)
+            node_w = min(120, max(64, (self.W - 40) // max(1, n) - 8))
             for i, name in enumerate(names):
                 cx, cy = positions[(li, i)]
                 gen, _parents = self.lineage.get(name, (None, []))
-                self._draw_tree_node(surf, cx, cy, name, gen, focus=(li == 0))
+                self._draw_tree_node(surf, cx, cy, name, gen, li == 0, node_w)
 
-    def _draw_tree_node(self, surf, cx, cy, name, gen, focus):
-        label = name if len(name) <= 12 else name[:11] + "."
-        w = max(96, _text_width_scaled(label, 2) + 24)
-        h = 34
-        rect = (cx - w // 2, cy - h // 2, w, h)
+    def _draw_tree_node(self, surf, cx, cy, name, gen, focus, node_w):
+        max_chars = max(3, (node_w - 12) // (GLYPH_W + GLYPH_GAP) // 2)
+        label = name if len(name) <= max_chars else name[:max_chars - 1] + "."
+        h = 32
+        rect = (cx - node_w // 2, cy - h // 2, node_w, h)
         _panel_box(surf, rect, CARD_HI if focus else CARD,
                    ACCENT if focus else BORDER, 2 if focus else 1)
-        _blit_text(surf, label, cx, cy - 10, TEXT if focus else TEXT, ts=2,
-                   align="center")
+        _blit_text(surf, label, cx, cy - 10, TEXT, ts=2, align="center")
         badge = "wild" if gen == 0 else (f"Gen {gen}" if gen is not None else "?")
         _blit_text(surf, badge, cx, cy + 4, ACCENT if focus else MUTED, ts=1,
                    align="center")

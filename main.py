@@ -20,6 +20,7 @@ import time
 import pygame
 
 import activity
+import config
 import persistence
 import playback
 import settings_panel
@@ -51,6 +52,7 @@ from pet import Pet
 from render import (
     draw_ball,
     draw_flight_rig,
+    draw_name_tag,
     draw_pet_frame,
     draw_speech_bubble,
     particle_sprite,
@@ -106,39 +108,6 @@ def _format_playtime(seconds):
     if minutes:
         return f"{minutes}m {secs:02d}s"
     return f"{secs}s"
-
-
-def _lineage_lookup(pets):
-    """Name -> (Generation, Eltern-Namen). Speist sich aus den persistierten
-    Pets (letzter Lauf) und den aktuell lebenden (frischer, ueberschreiben),
-    damit die Abstammungslinie auch ueber Neustarts hinweg sichtbar bleibt."""
-    lookup = {}
-    for data in persistence.load_pets():
-        name = data.get("name")
-        if isinstance(name, str):
-            parents = [p for p in data.get("parents", []) if isinstance(p, str)]
-            gen = data.get("generation")
-            lookup[name] = (gen if isinstance(gen, int) else 0, parents)
-    for entry in pets:
-        pet = entry["pet"]
-        lookup[pet.name] = (pet.generation, list(pet.parents))
-    return lookup
-
-
-def _lineage_lines(name, lookup, depth=0, seen=None):
-    """Die Abstammung als einfache, eingerueckte Textzeilen (kein grafischer
-    Baum). Zyklen-/Tiefensicher."""
-    if seen is None:
-        seen = set()
-    gen, parents = lookup.get(name, (None, []))
-    label = name if gen is None else f"{name} (Gen {gen})"
-    lines = [("   " * depth) + ("└ " if depth else "") + label]
-    if name in seen or depth >= 8:
-        return lines
-    seen.add(name)
-    for parent in parents:
-        lines.extend(_lineage_lines(parent, lookup, depth + 1, seen))
-    return lines
 
 
 def pet_under_point(pets, point):
@@ -207,7 +176,9 @@ def render_pet(entry, display_rects):
         overlay.show_surface(canvas)
         entry["pet_key"] = key
 
-    if pet.talking or pet.particles or pet.weapon or pet.flying or pet.joy_flying:
+    hovering = entry.get("hover") and not pet.talking and not pet.dying
+    if (pet.talking or pet.particles or pet.weapon or pet.flying
+            or pet.joy_flying or hovering):
         origin_x = round(pet.x + WINDOW_W / 2 - FX_W / 2)
         origin_y = round(pet.y + WINDOW_H / 2 - FX_H / 2)
         # Keep the effects window fully inside the SINGLE display the pet is on,
@@ -270,6 +241,14 @@ def render_pet(entry, display_rects):
                 by = pet_top - surf.get_height() + BUBBLE_GAP
             fx_canvas.blit(surf, (bx, by))
 
+        # Hover: kleines Namensschild ueber dem Kopf (nur solange die Maus drueber
+        # ist und keine Sprechblase laeuft).
+        if hovering:
+            tag = draw_name_tag(pet.name)
+            tx = pet_left + (WINDOW_W - tag.get_width()) // 2
+            ty = pet_top - tag.get_height() - 2
+            fx_canvas.blit(tag, (tx, ty))
+
         fx.move(origin_x, origin_y)
         fx.show_surface(fx_canvas)
         entry["fx_visible"] = True
@@ -326,6 +305,23 @@ def main():
     # Beenden dazu.
     lifetime = persistence.load_stats()
     session_start = time.monotonic()
+
+    # Stammbaum-Register: name -> {"generation", "parents"}. Sammelt ALLE je
+    # gelebten Pets (auch verstorbene Ahnen), damit der Stammbaum vollstaendig
+    # bleibt und ueber Neustarts hinweg waechst. Aus dem gespeicherten Zustand
+    # geladen und mit den aktuell lebenden Pets aufgefuellt.
+    family = saved_state.get("family")
+    if not isinstance(family, dict):
+        family = {}
+
+    def record_family(pet):
+        family[pet.name] = {
+            "generation": pet.generation,
+            "parents": list(pet.parents),
+        }
+
+    for entry in pets:
+        record_family(entry["pet"])
 
     # The menu-owning window is special: it hosts the status-bar menu, so it must
     # stay alive even when every pet is removed. We never close it — when its pet
@@ -436,14 +432,25 @@ def main():
             settings_overlay.close()
 
     def apply_settings_action(action):
-        """Eine vom Panel gemeldete Pet-Aktion ausfuehren."""
-        nonlocal drag_target
+        """Eine vom Panel gemeldete Aktion ausfuehren."""
+        nonlocal drag_target, focus_total_frames
         typ = action[0]
         if typ == "close":
             close_settings()
+        elif typ == "save":
+            # Sofort live anwenden, kein Neustart noetig.
+            config.reload_prefs()
+            focus_total_frames = config.FOCUS_MINUTES * 60 * FPS
         elif typ == "new_pet":
             if len(living_pets()) < MAX_PETS:
-                make_pet()["pet"].spawn_particles("star", 4)
+                entry = make_pet(randomize=True)
+                entry["pet"].spawn_particles("star", 4)
+                record_family(entry["pet"])
+        elif typ == "breed":
+            a = pet_entry_by_id(action[1])
+            b = pet_entry_by_id(action[2])
+            if a and b and not a["pet"].dying and not b["pet"].dying:
+                start_breeding(a, b)
         elif typ == "remove_all":
             living = living_pets()
             if living and _confirm_remove_all(len(living)):
@@ -457,20 +464,22 @@ def main():
             pet = entry["pet"]
             if typ == "recolour":
                 pet.cycle_palette()
+                record_family(pet)
             elif typ == "remove":
                 pet.start_death()
                 if entry is drag_target:
                     drag_target = None
             elif typ == "rename":
-                name = updater._prompt(
-                    "Neuer Name fuer diesen Pet:", pet.name
-                )
+                name = updater._prompt("Neuer Name fuer diesen Pet:", pet.name)
                 if name:
                     pet.rename(name)
+                    record_family(pet)
 
-    def make_pet(x=None, y=None):
+    def make_pet(x=None, y=None, randomize=False):
         """Spawn a fresh pet (appended to `pets`), reusing the menu window if it
-        is free so the app recovers cleanly from zero pets."""
+        is free so the app recovers cleanly from zero pets. Mit randomize=True
+        bekommt der neue Pet eine zufaellige Farbe (die Waffe ist ohnehin schon
+        zufaellig) — nur explizit neu erzeugte Pets, nie der erste Default-Pet."""
         nonlocal menu_overlay_free
         if menu_overlay_free:
             menu_overlay.set_mouse_ignore(False)
@@ -479,6 +488,11 @@ def main():
             menu_overlay_free = False
         else:
             entry = spawn_pet(bounds, platforms, x=x, y=y)
+        if randomize:
+            pet = entry["pet"]
+            pet.palette_index = random.randrange(len(config.PALETTES))
+            pet.palette = config.PALETTES[pet.palette_index]
+            pet.weapon_pref = random.choice(config.WEAPONS)
         if focus_active:
             entry["pet"].start_focus()
         pets.append(entry)
@@ -501,8 +515,10 @@ def main():
     def living_pets():
         return [e for e in pets if not e["pet"].dying]
 
-    def start_breeding():
-        """Kick off a courtship (or, with no pets, just conjure a new one)."""
+    def start_breeding(a=None, b=None):
+        """Kick off a courtship (or, with no pets, just conjure a new one).
+        Ohne Argumente werden zwei zufaellige lebende Pets gewaehlt; a/b koennen
+        vom Pets-Tab explizit vorgegeben werden."""
         nonlocal courting, breed_cooldown
         if courting is not None:
             return
@@ -516,13 +532,15 @@ def main():
                 living[0]["pet"].start_talk("Not yet!")
             return
         if not living:
-            make_pet()  # nothing to breed from — start over with a fresh pet
+            make_pet(randomize=True)  # nothing to breed from — start fresh
             breed_cooldown = BREED_COOLDOWN
             return
-        if len(living) == 1:
-            a = b = living[0]
-        else:
-            a, b = random.sample(living, 2)
+        if a is None or b is None:
+            # Zufaellig zwei Eltern (bei nur einem Pet zeugt es mit sich selbst).
+            if len(living) == 1:
+                a = b = living[0]
+            else:
+                a, b = random.sample(living, 2)
         mid = (a["pet"].x + b["pet"].x) / 2 + WINDOW_W / 2
         a["pet"].court_to(mid)
         if b is not a:
@@ -552,8 +570,9 @@ def main():
                 start_breeding()
             elif action == "new_pet":
                 if len(living_pets()) < MAX_PETS:
-                    baby = make_pet()
+                    baby = make_pet(randomize=True)
                     baby["pet"].spawn_particles("star", 4)
+                    record_family(baby["pet"])
                 elif lead:
                     lead.start_talk("Too crowded!")
             elif action == "focus_start" and not focus_active:
@@ -648,6 +667,12 @@ def main():
             if target and not target["pet"].dying:
                 target["pet"].on_click(drag["clicks"], mouse)
                 last_click_entry = target
+
+        # Hover: der oberste Pet unter dem Cursor bekommt ein Namensschild (nur
+        # wenn gerade nicht gezogen wird).
+        hover_entry = None if drag["dragging"] else pet_under_point(pets, mouse)
+        for entry in pets:
+            entry["hover"] = entry is hover_entry
 
         world = platforms
 
@@ -769,6 +794,7 @@ def main():
                         midy = min(a_pet.y, b_pet.y)
                         baby = make_pet(x=midx, y=midy)
                         baby["pet"].make_baby(a_pet, b_pet)
+                        record_family(baby["pet"])
                         a_pet.spawn_particles("heart", 5)
                         b_pet.spawn_particles("heart", 5)
                     a_pet.stop_courting()
@@ -815,6 +841,7 @@ def main():
                     "palette_index": e["pet"].palette_index,
                     "generation": e["pet"].generation,
                     "baby": e["pet"].baby,
+                    "weapon": e["pet"].weapon_pref,
                 }
                 for e in living_pets()
             ]
@@ -824,9 +851,15 @@ def main():
                 living = living_pets()
                 focus_name = living[-1]["pet"].name if living else None
             playtime = lifetime["playtime_seconds"] + (time.monotonic() - session_start)
+            # Register (name -> {generation, parents}) in das vom Panel erwartete
+            # Format (name -> (generation, [eltern])) bringen.
+            lineage = {
+                name: (rec.get("generation", 0), rec.get("parents", []))
+                for name, rec in family.items()
+            }
             settings.set_context(
                 pets_info,
-                _lineage_lookup(pets),
+                lineage,
                 focus_name,
                 stats={
                     "victories": lifetime["victories"],
@@ -861,6 +894,7 @@ def main():
         "version": persistence.STATE_VERSION,
         "pets": [persistence.pet_to_dict(e["pet"]) for e in living_pets()],
         "stats": lifetime,
+        "family": family,
     })
 
     playback_monitor.stop()

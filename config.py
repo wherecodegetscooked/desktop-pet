@@ -769,3 +769,25 @@ def _apply_prefs_overrides():
 
 
 _apply_prefs_overrides()
+
+
+def reload_prefs():
+    """prefs.json neu einlesen und live anwenden — ohne Neustart.
+
+    Viele Module haben Tunables per ``from config import X`` als eigene
+    Modul-Globale gebunden. Nach dem Neu-Einlesen schreiben wir die Werte darum
+    zusaetzlich in jedes Modul, das den Namen kennt (pet, __main__), sodass der
+    Effekt sofort greift. Gibt die Menge der geaenderten Keys zurueck."""
+    import sys
+
+    before = {key: globals()[key] for key in PREFS_FIELDS}
+    _apply_prefs_overrides()
+    changed = {key for key in PREFS_FIELDS if globals()[key] != before[key]}
+
+    targets = [sys.modules.get(name) for name in ("pet", "__main__", "main")]
+    for key in PREFS_FIELDS:
+        val = globals()[key]
+        for module in targets:
+            if module is not None and hasattr(module, key):
+                setattr(module, key, val)
+    return changed

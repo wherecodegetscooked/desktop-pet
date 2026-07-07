@@ -206,6 +206,22 @@ def render_pixel_text(text, color):
     return surface
 
 
+def draw_name_tag(name):
+    """Kleines Namensschild, das beim Hovern ueber einem Pet erscheint: dunkles
+    Kaestchen mit hellem Pixel-Text. Wird ueber dem Kopf platziert."""
+    scale = 2
+    text = render_pixel_text(name, (238, 242, 250, 255))
+    tw, th = text.get_width() * scale, text.get_height() * scale
+    pad_x, pad_y = 6, 4
+    w, h = tw + pad_x * 2, th + pad_y * 2
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    surf.fill(CLEAR)
+    pygame.draw.rect(surf, (26, 29, 44, 235), (0, 0, w, h))
+    pygame.draw.rect(surf, (120, 130, 165, 255), (0, 0, w, h), 1)
+    surf.blit(pygame.transform.scale(text, (tw, th)), (pad_x, pad_y))
+    return surf
+
+
 def draw_speech_bubble(text, tail_up=False):
     """Render a pixel speech bubble: cream box, dark border, and a tail that
     points down at the pet (default) or up at it (when the pet is near the top

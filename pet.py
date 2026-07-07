@@ -8,6 +8,8 @@ windowing or drawing code; the overlay renders whatever the pet's fields say.
 import math
 import random
 
+import breeding
+
 from config import (
     AFK_SLEEP_SECONDS,
     BALL_KICK_VX,
@@ -1630,19 +1632,20 @@ class Pet:
         inherit a blended temperament, one parent's colours, a name (sometimes a
         'Jr' of a parent's), and a weapon taste — then start tiny and grow up."""
         self.inherit_personality(parent_a.personality, parent_b.personality)
-        # Colour: take after one parent.
-        source = random.choice([parent_a, parent_b])
-        self.palette_index = source.palette_index
-        self.palette = source.palette
+        # Farbe und Waffe nach dem Vererbungsmodell (je 45% Elternteil, 10%
+        # Mutation) — dieselben Verteilungen zeigt die Zucht-Vorschau im Panel.
+        self.palette_index = breeding.choose_color(
+            parent_a.palette_index, parent_b.palette_index
+        )
+        self.palette = PALETTES[self.palette_index]
+        self.weapon_pref = breeding.choose_weapon(
+            parent_a.weapon_pref, parent_b.weapon_pref
+        )
         # Name: half the time a parent's name with a 'Jr', else a fresh one.
         if random.random() < 0.5:
             self.name = random.choice([parent_a.name, parent_b.name]) + BABY_NAME_SUFFIX
         else:
             self.name = random.choice(PET_NAMES)
-        # Weapon taste leans on the parents'.
-        self.weapon_pref = random.choice(
-            [parent_a.weapon_pref, parent_b.weapon_pref]
-        )
         # Abstammung festhalten: Generation eins ueber dem aelteren Elternteil,
         # Eltern-Namen fuer den Stammbaum (bei Selbst-Zeugung nur ein Name).
         self.generation = max(parent_a.generation, parent_b.generation) + 1
