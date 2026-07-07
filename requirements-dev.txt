@@ -1,0 +1,4 @@
+# Nur fuer die Tests noetig (Laufzeit braucht weiterhin nur requirements.txt).
+# Installieren: .venv/bin/pip install -r requirements-dev.txt
+# Ausfuehren:  .venv/bin/python -m pytest
+pytest>=8.0
