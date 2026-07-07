@@ -308,14 +308,6 @@ class MacOverlay:
         self._add_menu_item(
             menu, "Remove ball", "", self.menu_controller, b"removeBall:"
         )
-        self._add_menu_item(menu, "Recolour", "c", self.menu_controller, b"recolour:")
-        self._add_menu_item(menu, "Rename", "n", self.menu_controller, b"renamePet:")
-        self._add_menu_item(
-            menu, "Über diesen Pet", "", self.menu_controller, b"aboutPet:"
-        )
-        self._add_menu_item(
-            menu, "Stammbaum", "", self.menu_controller, b"familyTree:"
-        )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
             menu, "Breed", "b", self.menu_controller, b"breed:"
@@ -323,13 +315,9 @@ class MacOverlay:
         self._add_menu_item(
             menu, "New pet", "p", self.menu_controller, b"newPet:"
         )
-        self._add_menu_item(
-            menu, "Remove a pet", "r", self.menu_controller, b"removeDup:"
-        )
-        self._add_menu_item(
-            menu, "Remove all pets…", "", self.menu_controller, b"removeAll:"
-        )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
+        # Alles Weitere (Recolour, Rename, Entfernen, Tunables, Stammbaum) lebt
+        # jetzt im Pixel-Einstellungsfenster.
         self._add_menu_item(
             menu, "Einstellungen…", ",", self.menu_controller, b"openSettings:"
         )
@@ -412,16 +400,10 @@ class MacOverlay:
         for sel_name, action in (
             (b"breed:", "breed"),
             (b"newPet:", "new_pet"),
-            (b"removeDup:", "remove"),
-            (b"removeAll:", "remove_all"),
             (b"startFocus:", "focus_start"),
             (b"stopFocus:", "focus_stop"),
             (b"tossBall:", "ball"),
             (b"removeBall:", "ball_remove"),
-            (b"recolour:", "recolour"),
-            (b"renamePet:", "rename"),
-            (b"aboutPet:", "about"),
-            (b"familyTree:", "family"),
             (b"openSettings:", "settings"),
             (b"updateApp:", "update"),
         ):
@@ -671,24 +653,6 @@ class MacOverlay:
         origin, the same space the pet lives in). Used by the enraged pet to
         fling the cursor away. Needs no accessibility permission."""
         self.cg.CGWarpMouseCursorPosition(NSPoint(float(x), float(y)))
-
-    def open_file(self, path):
-        """Eine Datei im Standard-Editor oeffnen (NSWorkspace openFile:), analog
-        zu den uebrigen ObjC-Aufrufen. Fuer das Einstellungen-Menue: oeffnet
-        prefs.json zum Bearbeiten."""
-        objc = self.objc
-        NSWorkspace = objc.objc_getClass(b"NSWorkspace")
-        ws = _msg(objc, NSWorkspace, "sharedWorkspace")
-        return bool(
-            _msg(
-                objc,
-                ws,
-                "openFile:",
-                _nsstring(objc, path),
-                argtypes=[ctypes.c_void_p],
-                restype=ctypes.c_bool,
-            )
-        )
 
     def frontmost_app(self):
         """(bundle_id, localized_name) of the frontmost application, or two

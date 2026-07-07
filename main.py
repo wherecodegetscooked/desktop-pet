@@ -10,7 +10,6 @@ Supports multiple pets: the menu-bar "Breed" item spawns a child and
 love you; clicking it too often makes it arm itself and chase the cursor.
 """
 
-import json
 import math
 import os
 import random
@@ -21,9 +20,9 @@ import time
 import pygame
 
 import activity
-import config
 import persistence
 import playback
+import settings_panel
 import updater
 
 from ball import Ball
@@ -362,27 +361,82 @@ def main():
     courting = None
     breed_cooldown = 0
 
+    # -- Pixel-Einstellungsfenster ----------------------------------------
+    settings_overlay = None
+    settings = None
+    settings_open = False
+    settings_pos = (0, 0)
+    settings_prev_drag = False
+    next_pet_id = [0]
+
+    def assign_pet_ids():
+        for entry in pets:
+            if "id" not in entry:
+                next_pet_id[0] += 1
+                entry["id"] = next_pet_id[0]
+
+    def pet_entry_by_id(pid):
+        return next((e for e in pets if e.get("id") == pid), None)
+
     def open_settings():
-        """prefs.json im Standard-Editor oeffnen (beim ersten Mal mit den
-        aktuellen Default-Werten anlegen) und danach darauf hinweisen, dass
-        Aenderungen erst nach einem Neustart greifen. config.py bleibt die
-        Default-Quelle; prefs.json ueberschreibt selektiv."""
-        path = persistence.prefs_path()
-        if not os.path.exists(path):
-            defaults = {name: getattr(config, name) for name in config.PREFS_SPEC}
-            try:
-                os.makedirs(persistence.state_dir(), exist_ok=True)
-                with open(path, "w", encoding="utf-8") as handle:
-                    json.dump(defaults, handle, ensure_ascii=False, indent=2)
-            except OSError:
-                pass
-        primary.open_file(path)
-        updater._alert(
-            "Einstellungen in prefs.json bearbeiten.\n\nAenderungen werden beim "
-            "naechsten Start uebernommen.",
-            ["OK"],
-            "OK",
-        )
+        """Das Pixel-Einstellungsfenster oeffnen (beim ersten Mal erzeugen) und
+        mittig auf dem Hauptbildschirm platzieren."""
+        nonlocal settings_overlay, settings, settings_open, settings_pos
+        if settings_overlay is None:
+            settings_overlay = MacOverlay(
+                settings_panel.PANEL_W, settings_panel.PANEL_H, interactive=True
+            )
+            # Ein Level ueber Pets/Effekten, damit das Panel klar obenauf liegt.
+            settings_overlay.level += 1
+            settings = settings_panel.SettingsPanel()
+        cx = (bounds[0] + bounds[2]) // 2 - settings_panel.PANEL_W // 2
+        cy = (bounds[1] + bounds[3]) // 2 - settings_panel.PANEL_H // 2
+        settings_pos = (cx, cy)
+        settings_overlay.set_mouse_ignore(False)
+        settings_overlay.move(cx, cy)
+        settings_overlay.reassert_top()
+        settings.dirty = True
+        settings_open = True
+
+    def close_settings():
+        nonlocal settings_open
+        settings_open = False
+        if settings_overlay is not None:
+            settings_overlay.close()
+            settings_overlay.set_mouse_ignore(True)
+
+    def apply_settings_action(action):
+        """Eine vom Panel gemeldete Pet-Aktion ausfuehren."""
+        nonlocal drag_target
+        typ = action[0]
+        if typ == "close":
+            close_settings()
+        elif typ == "new_pet":
+            if len(living_pets()) < MAX_PETS:
+                make_pet()["pet"].spawn_particles("star", 4)
+        elif typ == "remove_all":
+            living = living_pets()
+            if living and _confirm_remove_all(len(living)):
+                for entry in living:
+                    entry["pet"].start_death()
+                drag_target = None
+        elif typ in ("recolour", "rename", "remove"):
+            entry = pet_entry_by_id(action[1])
+            if entry is None or entry["pet"].dying:
+                return
+            pet = entry["pet"]
+            if typ == "recolour":
+                pet.cycle_palette()
+            elif typ == "remove":
+                pet.start_death()
+                if entry is drag_target:
+                    drag_target = None
+            elif typ == "rename":
+                name = updater._prompt(
+                    "Neuer Name fuer diesen Pet:", pet.name
+                )
+                if name:
+                    pet.rename(name)
 
     def make_pet(x=None, y=None):
         """Spawn a fresh pet (appended to `pets`), reusing the menu window if it
@@ -464,13 +518,6 @@ def main():
 
         for action in primary.consume_menu_actions():
             lead = pets[0]["pet"] if pets else None
-            # Der "vorderste" Pet fuer pet-bezogene Infos: zuletzt angeklickt,
-            # falls noch am Leben, sonst der oberste (zuletzt gespawnte) lebende.
-            if last_click_entry in pets and not last_click_entry["pet"].dying:
-                focus = last_click_entry["pet"]
-            else:
-                living = living_pets()
-                focus = living[-1]["pet"] if living else lead
             if action == "breed":
                 start_breeding()
             elif action == "new_pet":
@@ -479,24 +526,6 @@ def main():
                     baby["pet"].spawn_particles("star", 4)
                 elif lead:
                     lead.start_talk("Too crowded!")
-            elif action == "remove":
-                # Topmost living pet gets a dramatic send-off (then it's culled
-                # once the animation finishes).
-                victim = next(
-                    (e for e in reversed(pets) if not e["pet"].dying), None
-                )
-                if victim:
-                    victim["pet"].start_death()
-                    if victim is drag_target:
-                        drag_target = None
-            elif action == "remove_all":
-                living = living_pets()
-                if living and _confirm_remove_all(len(living)):
-                    for entry in living:
-                        entry["pet"].start_death()
-                    drag_target = None
-                    if courting is not None:
-                        courting = None
             elif action == "focus_start" and not focus_active:
                 focus_active = True
                 focus_frames_left = focus_total_frames
@@ -523,44 +552,8 @@ def main():
             elif action == "ball_remove" and ball is not None:
                 ball_overlay.close()
                 ball = None
-            elif action == "about" and focus:
-                playtime = lifetime["playtime_seconds"] + (
-                    time.monotonic() - session_start
-                )
-                char = focus.personality.get("name", "?")
-                if focus.generation == 0:
-                    lineage = "wild geboren"
-                else:
-                    parents = ", ".join(focus.parents) if focus.parents else "unbekannt"
-                    lineage = f"Generation {focus.generation}, Eltern: {parents}"
-                updater._alert(
-                    f"{focus.name}\n"
-                    f"Charakter: {char}\n"
-                    f"Abstammung: {lineage}\n\n"
-                    "Lifetime-Statistik (alle Pets):\n"
-                    f"Gewonnene Kaempfe: {lifetime['victories']}\n"
-                    f"Gefangene Baelle: {lifetime['balls']}\n"
-                    f"Gesamt-Spielzeit: {_format_playtime(playtime)}",
-                    ["OK"],
-                    "OK",
-                )
-            elif action == "family" and focus:
-                lookup = _lineage_lookup(pets)
-                if focus.generation == 0 and not focus.parents:
-                    body = f"{focus.name} ist wild geboren — keine Eltern bekannt."
-                else:
-                    body = "\n".join(_lineage_lines(focus.name, lookup))
-                updater._alert(
-                    f"Stammbaum von {focus.name}\n\n{body}",
-                    ["OK"],
-                    "OK",
-                )
             elif action == "settings":
                 open_settings()
-            elif action == "recolour" and lead:
-                lead.cycle_palette()
-            elif action == "rename" and lead:
-                lead.rename()
             elif action == "update" and not pending_update:
                 # updater shows its own dialogs (up to date / found / failed);
                 # we only act when it kicks off the download + relaunch.
@@ -599,9 +592,34 @@ def main():
                 entry["pet"].set_activity(context, music)
             last_activity_scan = now
 
+        # Einstellungsfenster: Maus/Drag/Klick verarbeiten, solange es offen ist.
+        # Zeigt der Cursor aufs Panel (oder wird gerade ein Slider gezogen),
+        # gehoert die Interaktion dem Panel — die Pet-Steuerung darunter pausiert.
+        settings_grab = False
+        if settings_open and settings is not None:
+            local = None
+            if mouse is not None:
+                local = (mouse[0] - settings_pos[0], mouse[1] - settings_pos[1])
+            inside = local is not None and 0 <= local[0] < settings_panel.PANEL_W \
+                and 0 <= local[1] < settings_panel.PANEL_H
+            dragging_now = drag["dragging"]
+            if local is not None:
+                if dragging_now and not settings_prev_drag and inside:
+                    settings.on_grab(local)
+                elif dragging_now and settings.active_slider is not None:
+                    settings.on_drag(local)
+                elif not dragging_now and settings_prev_drag:
+                    settings.on_release()
+                if drag["clicks"] and inside:
+                    settings.on_click(local)
+            settings_prev_drag = dragging_now
+            settings_grab = inside or settings.active_slider is not None
+            for act in settings.pop_actions():
+                apply_settings_action(act)
+
         # Drag: only a gesture that actually moved counts as a drag, so a plain
         # click never sticks a pet as the drag target (which would freeze it).
-        if drag["dragging"] and drag["moved"]:
+        if not settings_grab and drag["dragging"] and drag["moved"]:
             if drag_target is None and drag["position"]:
                 drag_target = pet_under_point(pets, mouse)
             if drag_target and drag["position"]:
@@ -611,7 +629,7 @@ def main():
                 drag_target["pet"].release()
             drag_target = None
 
-        if drag["clicks"]:
+        if drag["clicks"] and not settings_grab:
             target = pet_under_point(pets, mouse) or (pets[0] if pets else None)
             if target and not target["pet"].dying:
                 target["pet"].on_click(drag["clicks"], mouse)
@@ -772,12 +790,48 @@ def main():
             ball_overlay.move(round(ball.x - BALL_WIN / 2), round(ball.y - BALL_WIN / 2))
             ball_overlay.show_surface(draw_ball())
 
+        # Einstellungsfenster mit aktuellem Kontext neu zeichnen (nur pushen, wenn
+        # sich etwas geaendert hat). Liegt ganz oben.
+        if settings_open and settings is not None:
+            assign_pet_ids()
+            pets_info = [
+                {
+                    "id": e["id"],
+                    "name": e["pet"].name,
+                    "palette_index": e["pet"].palette_index,
+                    "generation": e["pet"].generation,
+                    "baby": e["pet"].baby,
+                }
+                for e in living_pets()
+            ]
+            if last_click_entry in pets and not last_click_entry["pet"].dying:
+                focus_name = last_click_entry["pet"].name
+            else:
+                living = living_pets()
+                focus_name = living[-1]["pet"].name if living else None
+            playtime = lifetime["playtime_seconds"] + (time.monotonic() - session_start)
+            settings.set_context(
+                pets_info,
+                _lineage_lookup(pets),
+                focus_name,
+                stats={
+                    "victories": lifetime["victories"],
+                    "balls": lifetime["balls"],
+                    "playtime": _format_playtime(playtime),
+                },
+            )
+            surf = settings.render()
+            if settings.take_dirty():
+                settings_overlay.show_surface(surf)
+
         if now - last_reassert > 0.5:
             for entry in pets:
                 entry["overlay"].reassert_top()
                 entry["fx"].reassert_top()
             if ball is not None:
                 ball_overlay.reassert_top()
+            if settings_open and settings_overlay is not None:
+                settings_overlay.reassert_top()
             last_reassert = now
 
         # After an update was requested, let the "Updating!" bubble show for a

@@ -671,20 +671,79 @@ BABY_PHRASES = [
 
 
 # -- Benutzer-Prefs (prefs.json) --------------------------------------------
-# Eine kleine Auswahl haeufig gewuenschter Tunables laesst sich ohne Code-Edit
-# aendern: config.py bleibt die Default-Quelle, prefs.json im App-Support-Ordner
-# ueberschreibt selektiv. Das Menue "Einstellungen…" oeffnet die Datei. Nur die
-# unten gelistete Whitelist wird angewandt; unbekannte, falsch getypte oder
-# unplausible Werte werden still ignoriert (nie eine Exception nach aussen).
+# config.py bleibt die Default-Quelle; prefs.json im App-Support-Ordner
+# ueberschreibt eine Whitelist selektiv. Das Pixel-Einstellungsfenster liest und
+# schreibt genau diese Whitelist. Jeder Eintrag traegt die UI-Metadaten (Label,
+# Kurzbeschreibung, Typ, Range, Schrittweite), sodass Fenster und Loader dieselbe
+# Quelle nutzen. Unbekannte, falsch getypte oder unplausible Werte werden still
+# ignoriert (nie eine Exception nach aussen).
 PREFS_PATH = "~/Library/Application Support/Desktop Pet/prefs.json"
-# Name -> (erlaubte Typen, Plausibilitaets-Check). Diese Namen bilden zugleich
-# den Default-Inhalt, den "Einstellungen…" beim ersten Mal schreibt.
-PREFS_SPEC = {
-    "MAX_PETS": ((int,), lambda v: 1 <= v <= 64),
-    "AFK_SLEEP_SECONDS": ((int, float), lambda v: v > 0),
-    "FOCUS_MINUTES": ((int, float), lambda v: v > 0),
-    "RAGE_ENABLED": ((bool,), lambda v: True),
-}
+
+# Nach Tabs gruppiert. type: "int" | "float" | "bool". Bei Zahlen min/max/step.
+PREFS_SCHEMA = [
+    ("Allgemein", [
+        {"key": "MAX_PETS", "label": "Max. Pets", "type": "int",
+         "min": 1, "max": 12, "step": 1,
+         "help": "Wie viele Pets gleichzeitig leben dürfen."},
+        {"key": "FOCUS_MINUTES", "label": "Fokus-Dauer", "type": "int",
+         "min": 5, "max": 120, "step": 5, "unit": "min",
+         "help": "Länge einer Pomodoro-Fokussitzung."},
+        {"key": "BREED_COOLDOWN", "label": "Zucht-Pause", "type": "int",
+         "min": 120, "max": 3600, "step": 60, "unit": "f",
+         "help": "Wartezeit zwischen Zuchten in Frames (60 pro Sek)."},
+        {"key": "AFK_SLEEP_SECONDS", "label": "Einschlafen nach", "type": "int",
+         "min": 10, "max": 600, "step": 10, "unit": "s",
+         "help": "Sek. ohne Eingabe, bis der Pet einschläft."},
+    ]),
+    ("Verhalten", [
+        {"key": "BORED_SECONDS", "label": "Langeweile nach", "type": "int",
+         "min": 5, "max": 300, "step": 5, "unit": "s",
+         "help": "Sek. ohne Eingabe, bis ihm langweilig wird."},
+        {"key": "SPEAK_CHANCE", "label": "Redet", "type": "float",
+         "min": 0.0, "max": 0.02, "step": 0.0005,
+         "help": "Chance pro Frame, etwas zu sagen."},
+        {"key": "SOCIAL_CHANCE", "label": "Gesellig", "type": "float",
+         "min": 0.0, "max": 0.02, "step": 0.0005,
+         "help": "Chance, zu einem anderen Pet zu wandern."},
+        {"key": "FOLLOW_CHANCE", "label": "Folgt Cursor", "type": "float",
+         "min": 0.0, "max": 0.02, "step": 0.0005,
+         "help": "Chance, dem Mauszeiger nachzulaufen."},
+        {"key": "WINDOW_JUMP_CHANCE", "label": "Fenstersprünge", "type": "float",
+         "min": 0.0, "max": 0.02, "step": 0.0005,
+         "help": "Chance, auf ein anderes Fenster zu springen."},
+        {"key": "JETPACK_HOP_CHANCE", "label": "Jetpack-Hüpfer", "type": "float",
+         "min": 0.0, "max": 1.0, "step": 0.05,
+         "help": "Anteil der Spruenge, die zum Jetpack-Hüpfer werden."},
+    ]),
+    ("Combat", [
+        {"key": "RAGE_ENABLED", "label": "Kampf aktiv", "type": "bool",
+         "help": "Darf der Pet sich bewaffnen und den Cursor jagen?"},
+        {"key": "ANGRY_THRESHOLD", "label": "Ärger-Schwelle", "type": "int",
+         "min": 1, "max": 12, "step": 1,
+         "help": "Klicks, bis er verärgert ist."},
+        {"key": "RAGE_THRESHOLD", "label": "Wut-Schwelle", "type": "int",
+         "min": 2, "max": 24, "step": 1,
+         "help": "Ärger, bis er in den Kampf-Modus kippt."},
+        {"key": "GRAVITY", "label": "Schwerkraft", "type": "float",
+         "min": 0.1, "max": 1.0, "step": 0.02,
+         "help": "Wie schnell er faellt (hoeher = schwerer)."},
+    ]),
+]
+
+# Flache key -> field-Map fuer den Loader und das Fenster.
+PREFS_FIELDS = {f["key"]: f for _group, fields in PREFS_SCHEMA for f in fields}
+
+
+def _pref_ok(field, val):
+    """Ob ein Rohwert zum Feld passt (Typ + Range). bool sauber von int trennen."""
+    kind = field["type"]
+    if kind == "bool":
+        return isinstance(val, bool)
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return False
+    if kind == "int" and not float(val).is_integer():
+        return False
+    return field["min"] <= val <= field["max"]
 
 
 def _apply_prefs_overrides():
@@ -700,22 +759,13 @@ def _apply_prefs_overrides():
         return
 
     g = globals()
-    for name, (types, valid) in PREFS_SPEC.items():
-        if name not in data:
+    for key, field in PREFS_FIELDS.items():
+        if key not in data:
             continue
-        val = data[name]
-        # bool ist int-Subklasse: nur akzeptieren, wenn bool auch erwartet wird,
-        # und umgekehrt keine bools in Zahlenfelder durchrutschen lassen.
-        if bool in types:
-            if not isinstance(val, bool):
-                continue
-        elif isinstance(val, bool) or not isinstance(val, types):
+        val = data[key]
+        if not _pref_ok(field, val):
             continue
-        try:
-            if valid(val):
-                g[name] = val
-        except (TypeError, ValueError):
-            continue
+        g[key] = int(val) if field["type"] == "int" else val
 
 
 _apply_prefs_overrides()

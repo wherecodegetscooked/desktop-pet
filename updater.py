@@ -101,6 +101,30 @@ def _alert(message, buttons, default):
     return None
 
 
+def _prompt(message, default=""):
+    """Native Texteingabe (System Events display dialog mit default answer).
+    Gibt den eingegebenen Text zurueck, oder None bei Abbruch/Fehler."""
+    dialog = (
+        f"display dialog {_as_applescript(message)} "
+        f"default answer {_as_applescript(default)} "
+        'with title "Desktop Pet" buttons {"Abbrechen", "OK"} default button "OK"'
+    )
+    lines = ["tell application \"System Events\"", "activate", dialog, "end tell"]
+    args = ["osascript"]
+    for line in lines:
+        args += ["-e", line]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None  # Abbrechen
+    marker = "text returned:"
+    if marker in result.stdout:
+        return result.stdout.split(marker, 1)[1].strip()
+    return None
+
+
 _SWAP_SCRIPT = """#!/bin/zsh
 set -uo pipefail
 URL=__URL__
