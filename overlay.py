@@ -586,6 +586,14 @@ class MacOverlay:
         # entfaellt. self.last_buffer haelt den Puffer am Leben, bis der naechste
         # Frame ihn ersetzt (die Layer-Contents referenzieren ihn bis dahin).
         pixels = pygame.image.tobytes(surface, "BGRA")
+        # Dirty-Check: Ist der Pixel-Inhalt identisch zum letzten Frame, ist der
+        # Layer schon korrekt — dann CGImage-Neuaufbau und setContents: komplett
+        # ueberspringen. Spart CPU/Energie bei ruhenden Pets, dem still liegenden
+        # Ball und statischen FX-Layern (nur Position aendert sich via move()).
+        # bytes-Vergleich ist ein schnelles memcmp; bei Groessenwechsel schlaegt
+        # er ohnehin fehl und der Frame wird korrekt neu gepusht.
+        if pixels == self.last_buffer:
+            return
         provider = self.cg.CGDataProviderCreateWithData(None, pixels, len(pixels), None)
         if not provider:
             return
