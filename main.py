@@ -109,6 +109,39 @@ def _format_playtime(seconds):
     return f"{secs}s"
 
 
+def _lineage_lookup(pets):
+    """Name -> (Generation, Eltern-Namen). Speist sich aus den persistierten
+    Pets (letzter Lauf) und den aktuell lebenden (frischer, ueberschreiben),
+    damit die Abstammungslinie auch ueber Neustarts hinweg sichtbar bleibt."""
+    lookup = {}
+    for data in persistence.load_pets():
+        name = data.get("name")
+        if isinstance(name, str):
+            parents = [p for p in data.get("parents", []) if isinstance(p, str)]
+            gen = data.get("generation")
+            lookup[name] = (gen if isinstance(gen, int) else 0, parents)
+    for entry in pets:
+        pet = entry["pet"]
+        lookup[pet.name] = (pet.generation, list(pet.parents))
+    return lookup
+
+
+def _lineage_lines(name, lookup, depth=0, seen=None):
+    """Die Abstammung als einfache, eingerueckte Textzeilen (kein grafischer
+    Baum). Zyklen-/Tiefensicher."""
+    if seen is None:
+        seen = set()
+    gen, parents = lookup.get(name, (None, []))
+    label = name if gen is None else f"{name} (Gen {gen})"
+    lines = [("   " * depth) + ("└ " if depth else "") + label]
+    if name in seen or depth >= 8:
+        return lines
+    seen.add(name)
+    for parent in parents:
+        lines.extend(_lineage_lines(parent, lookup, depth + 1, seen))
+    return lines
+
+
 def pet_under_point(pets, point):
     """Topmost (most recently spawned) pet whose hitbox contains point."""
     if point is None:
@@ -311,6 +344,8 @@ def main():
     last_window_scan = 0.0
     last_activity_scan = 0.0
     drag_target = None
+    # Zuletzt angeklickter Pet — Ziel fuer "Über diesen Pet" und "Stammbaum".
+    last_click_entry = None
     last_key_count = None
     focus_active = False
     focus_frames_left = 0
@@ -429,6 +464,13 @@ def main():
 
         for action in primary.consume_menu_actions():
             lead = pets[0]["pet"] if pets else None
+            # Der "vorderste" Pet fuer pet-bezogene Infos: zuletzt angeklickt,
+            # falls noch am Leben, sonst der oberste (zuletzt gespawnte) lebende.
+            if last_click_entry in pets and not last_click_entry["pet"].dying:
+                focus = last_click_entry["pet"]
+            else:
+                living = living_pets()
+                focus = living[-1]["pet"] if living else lead
             if action == "breed":
                 start_breeding()
             elif action == "new_pet":
@@ -481,24 +523,35 @@ def main():
             elif action == "ball_remove" and ball is not None:
                 ball_overlay.close()
                 ball = None
-            elif action == "about" and lead:
+            elif action == "about" and focus:
                 playtime = lifetime["playtime_seconds"] + (
                     time.monotonic() - session_start
                 )
-                char = lead.personality.get("name", "?")
-                if lead.generation == 0:
+                char = focus.personality.get("name", "?")
+                if focus.generation == 0:
                     lineage = "wild geboren"
                 else:
-                    parents = ", ".join(lead.parents) if lead.parents else "unbekannt"
-                    lineage = f"Generation {lead.generation}, Eltern: {parents}"
+                    parents = ", ".join(focus.parents) if focus.parents else "unbekannt"
+                    lineage = f"Generation {focus.generation}, Eltern: {parents}"
                 updater._alert(
-                    f"{lead.name}\n"
+                    f"{focus.name}\n"
                     f"Charakter: {char}\n"
                     f"Abstammung: {lineage}\n\n"
                     "Lifetime-Statistik (alle Pets):\n"
                     f"Gewonnene Kaempfe: {lifetime['victories']}\n"
                     f"Gefangene Baelle: {lifetime['balls']}\n"
                     f"Gesamt-Spielzeit: {_format_playtime(playtime)}",
+                    ["OK"],
+                    "OK",
+                )
+            elif action == "family" and focus:
+                lookup = _lineage_lookup(pets)
+                if focus.generation == 0 and not focus.parents:
+                    body = f"{focus.name} ist wild geboren — keine Eltern bekannt."
+                else:
+                    body = "\n".join(_lineage_lines(focus.name, lookup))
+                updater._alert(
+                    f"Stammbaum von {focus.name}\n\n{body}",
                     ["OK"],
                     "OK",
                 )
@@ -562,6 +615,7 @@ def main():
             target = pet_under_point(pets, mouse) or (pets[0] if pets else None)
             if target and not target["pet"].dying:
                 target["pet"].on_click(drag["clicks"], mouse)
+                last_click_entry = target
 
         world = platforms
 

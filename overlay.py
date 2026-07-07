@@ -313,6 +313,9 @@ class MacOverlay:
         self._add_menu_item(
             menu, "Über diesen Pet", "", self.menu_controller, b"aboutPet:"
         )
+        self._add_menu_item(
+            menu, "Stammbaum", "", self.menu_controller, b"familyTree:"
+        )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
             menu, "Breed", "b", self.menu_controller, b"breed:"
@@ -418,6 +421,7 @@ class MacOverlay:
             (b"recolour:", "recolour"),
             (b"renamePet:", "rename"),
             (b"aboutPet:", "about"),
+            (b"familyTree:", "family"),
             (b"openSettings:", "settings"),
             (b"updateApp:", "update"),
         ):

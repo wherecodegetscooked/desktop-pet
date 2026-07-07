@@ -1631,6 +1631,13 @@ class Pet:
         self.weapon_pref = random.choice(
             [parent_a.weapon_pref, parent_b.weapon_pref]
         )
+        # Abstammung festhalten: Generation eins ueber dem aelteren Elternteil,
+        # Eltern-Namen fuer den Stammbaum (bei Selbst-Zeugung nur ein Name).
+        self.generation = max(parent_a.generation, parent_b.generation) + 1
+        if parent_a is parent_b:
+            self.parents = [parent_a.name]
+        else:
+            self.parents = [parent_a.name, parent_b.name]
         self.baby = True
         self.growth = 0.0
         self.baby_age = 0
