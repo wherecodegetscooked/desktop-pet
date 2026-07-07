@@ -325,6 +325,9 @@ class MacOverlay:
         )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
+            menu, "Einstellungen…", ",", self.menu_controller, b"openSettings:"
+        )
+        self._add_menu_item(
             menu, "Check for updates…", "u", self.menu_controller, b"updateApp:"
         )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
@@ -411,6 +414,7 @@ class MacOverlay:
             (b"removeBall:", "ball_remove"),
             (b"recolour:", "recolour"),
             (b"renamePet:", "rename"),
+            (b"openSettings:", "settings"),
             (b"updateApp:", "update"),
         ):
             imp = make_imp(action)
@@ -659,6 +663,24 @@ class MacOverlay:
         origin, the same space the pet lives in). Used by the enraged pet to
         fling the cursor away. Needs no accessibility permission."""
         self.cg.CGWarpMouseCursorPosition(NSPoint(float(x), float(y)))
+
+    def open_file(self, path):
+        """Eine Datei im Standard-Editor oeffnen (NSWorkspace openFile:), analog
+        zu den uebrigen ObjC-Aufrufen. Fuer das Einstellungen-Menue: oeffnet
+        prefs.json zum Bearbeiten."""
+        objc = self.objc
+        NSWorkspace = objc.objc_getClass(b"NSWorkspace")
+        ws = _msg(objc, NSWorkspace, "sharedWorkspace")
+        return bool(
+            _msg(
+                objc,
+                ws,
+                "openFile:",
+                _nsstring(objc, path),
+                argtypes=[ctypes.c_void_p],
+                restype=ctypes.c_bool,
+            )
+        )
 
     def frontmost_app(self):
         """(bundle_id, localized_name) of the frontmost application, or two

@@ -150,6 +150,7 @@ ANGER_DECAY = 0.010                  # Anger cooled per frame (slower = stays cr
 # he has to actually land RAGE_HITS_TO_CALM clean blows (or capture the cursor),
 # and even then only after RAGE_MIN_DURATION has passed. A hard RAGE_MAX_DURATION
 # ceiling stops a fight lasting forever if the cursor is parked out of reach.
+RAGE_ENABLED = True                  # Combat/Rage-Mechanik an/aus (per prefs.json schaltbar).
 RAGE_THRESHOLD = 6                   # Total anger that tips him into violence.
 RAGE_DURATION = 900                  # Base frames he stays violent (~15s).
 RAGE_MIN_DURATION = 480              # He can't calm before this many frames (~8s).
@@ -667,3 +668,54 @@ BABY_PHRASES = [
     "Still finding the coffee machine.",
     "Reply-all by accident. Classic.",
 ]
+
+
+# -- Benutzer-Prefs (prefs.json) --------------------------------------------
+# Eine kleine Auswahl haeufig gewuenschter Tunables laesst sich ohne Code-Edit
+# aendern: config.py bleibt die Default-Quelle, prefs.json im App-Support-Ordner
+# ueberschreibt selektiv. Das Menue "Einstellungen…" oeffnet die Datei. Nur die
+# unten gelistete Whitelist wird angewandt; unbekannte, falsch getypte oder
+# unplausible Werte werden still ignoriert (nie eine Exception nach aussen).
+PREFS_PATH = "~/Library/Application Support/Desktop Pet/prefs.json"
+# Name -> (erlaubte Typen, Plausibilitaets-Check). Diese Namen bilden zugleich
+# den Default-Inhalt, den "Einstellungen…" beim ersten Mal schreibt.
+PREFS_SPEC = {
+    "MAX_PETS": ((int,), lambda v: 1 <= v <= 64),
+    "AFK_SLEEP_SECONDS": ((int, float), lambda v: v > 0),
+    "FOCUS_MINUTES": ((int, float), lambda v: v > 0),
+    "RAGE_ENABLED": ((bool,), lambda v: True),
+}
+
+
+def _apply_prefs_overrides():
+    import json
+    import os
+
+    try:
+        with open(os.path.expanduser(PREFS_PATH), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict):
+        return
+
+    g = globals()
+    for name, (types, valid) in PREFS_SPEC.items():
+        if name not in data:
+            continue
+        val = data[name]
+        # bool ist int-Subklasse: nur akzeptieren, wenn bool auch erwartet wird,
+        # und umgekehrt keine bools in Zahlenfelder durchrutschen lassen.
+        if bool in types:
+            if not isinstance(val, bool):
+                continue
+        elif isinstance(val, bool) or not isinstance(val, types):
+            continue
+        try:
+            if valid(val):
+                g[name] = val
+        except (TypeError, ValueError):
+            continue
+
+
+_apply_prefs_overrides()

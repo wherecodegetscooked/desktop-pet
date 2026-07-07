@@ -27,6 +27,10 @@ def state_path():
     return os.path.join(state_dir(), "state.json")
 
 
+def prefs_path():
+    return os.path.join(state_dir(), "prefs.json")
+
+
 def pet_to_dict(pet):
     """Die aussehens-/identitaetsbestimmenden Felder eines Pets als JSON-Dict.
 

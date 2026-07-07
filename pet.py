@@ -74,6 +74,7 @@ from config import (
     RAGE_CATCH_PHRASES,
     RAGE_CHASE_SPEED,
     RAGE_DURATION,
+    RAGE_ENABLED,
     RAGE_LOCK_PHRASES,
     RAGE_PHRASES,
     RAGE_THRESHOLD,
@@ -697,7 +698,15 @@ class Pet:
         self.start_talk(random.choice(ANGRY_PHRASES))
 
     def _become_rage(self):
-        """Boil over: draw the favourite weapon and switch into combat mode."""
+        """Boil over: draw the favourite weapon and switch into combat mode.
+
+        Ist die Combat-Mechanik per prefs.json abgeschaltet, wird er hoechstens
+        veraergert statt bewaffnet — greift fuer alle Aufrufer (Klicks,
+        provoke_to_fight, Gruppen-Combat)."""
+        if not RAGE_ENABLED:
+            if not self.angry:
+                self._become_angry()
+            return
         self.rage = True
         self.angry = True
         self.angry_timer = ANGRY_DURATION

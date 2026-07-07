@@ -10,6 +10,7 @@ Supports multiple pets: the menu-bar "Breed" item spawns a child and
 love you; clicking it too often makes it arm itself and chase the cursor.
 """
 
+import json
 import math
 import os
 import random
@@ -20,6 +21,7 @@ import time
 import pygame
 
 import activity
+import config
 import persistence
 import playback
 import updater
@@ -307,6 +309,28 @@ def main():
     courting = None
     breed_cooldown = 0
 
+    def open_settings():
+        """prefs.json im Standard-Editor oeffnen (beim ersten Mal mit den
+        aktuellen Default-Werten anlegen) und danach darauf hinweisen, dass
+        Aenderungen erst nach einem Neustart greifen. config.py bleibt die
+        Default-Quelle; prefs.json ueberschreibt selektiv."""
+        path = persistence.prefs_path()
+        if not os.path.exists(path):
+            defaults = {name: getattr(config, name) for name in config.PREFS_SPEC}
+            try:
+                os.makedirs(persistence.state_dir(), exist_ok=True)
+                with open(path, "w", encoding="utf-8") as handle:
+                    json.dump(defaults, handle, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
+        primary.open_file(path)
+        updater._alert(
+            "Einstellungen in prefs.json bearbeiten.\n\nAenderungen werden beim "
+            "naechsten Start uebernommen.",
+            ["OK"],
+            "OK",
+        )
+
     def make_pet(x=None, y=None):
         """Spawn a fresh pet (appended to `pets`), reusing the menu window if it
         is free so the app recovers cleanly from zero pets."""
@@ -439,6 +463,8 @@ def main():
             elif action == "ball_remove" and ball is not None:
                 ball_overlay.close()
                 ball = None
+            elif action == "settings":
+                open_settings()
             elif action == "recolour" and lead:
                 lead.cycle_palette()
             elif action == "rename" and lead:
