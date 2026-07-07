@@ -209,6 +209,11 @@ class Pet:
         self._aim = None             # cursor pos committed to at swing start
         self.attack_landed = False
         self.rage_age = 0            # frames since this rage began (calm gating).
+        # Gruppen-Combat: True, wenn dieser Kampf nur durch Nachbarn ausgeloest
+        # wurde (provoke_to_fight). Rekrutierte kaempfen mit, ziehen aber selbst
+        # niemanden nach — sonst halten sich wuetende Pets gegenseitig endlos in
+        # Rage. Nur wer selbst (per Klick) wuetend wurde, rekrutiert.
+        self.recruited = False
         # Mobility brain: when the cursor floats out of walking reach a melee
         # fighter fires a little jetpack and flies at it; repeated fruitless
         # flights make him adapt and pull a ranged weapon instead.
@@ -656,6 +661,8 @@ class Pet:
         self.love = max(0.0, self.love - clicks)
         if self.loved and self.love < 1.0:
             self.loved = False
+        # Vom User direkt geaergert: ein genuiner Kaempfer, der Nachbarn nachzieht.
+        self.recruited = False
         if not self.rage and self.anger >= RAGE_THRESHOLD:
             self._become_rage()
         elif not self.angry and self.anger >= ANGRY_THRESHOLD:
@@ -687,6 +694,9 @@ class Pet:
         if threat_pos is not None:
             # Face and aim at the reported threat so the whole group converges.
             self._aim = tuple(threat_pos)
+        # Nur durch Nachbarn hineingezogen: mitkaempfen, aber nicht selbst weiter
+        # rekrutieren (bricht die endlose gegenseitige Aufschaukelung).
+        self.recruited = True
         self.anger += anger_amount
         if self.anger >= RAGE_THRESHOLD:
             self._become_rage()
@@ -814,6 +824,7 @@ class Pet:
             if (fought_enough or timed_out) and not busy:
                 self.rage = False
                 self.weapon = None
+                self.recruited = False
                 self._reset_combat()
         if self.angry:
             self.angry_timer -= 1
@@ -1499,6 +1510,7 @@ class Pet:
         self.angry_timer = 0
         self.anger = 0.0
         self.capturing = False
+        self.recruited = False
         self._reset_combat()
 
     def _maybe_follow_mouse(self, mouse):

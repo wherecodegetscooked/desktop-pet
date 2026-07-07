@@ -660,7 +660,11 @@ def main():
             return (p.x + WINDOW_W / 2, p.y + WINDOW_H / 2)
 
         adults = [e["pet"] for e in pets if not e["pet"].baby and not e["pet"].dying]
-        fighters = [p for p in adults if p.rage]
+        # Nur selbst wuetend gewordene Pets (per Klick) rekrutieren Nachbarn.
+        # Rekrutierte Kaempfer kaempfen mit, ziehen aber niemanden nach — sonst
+        # halten sich wuetende Pets endlos gegenseitig in Rage, und ein gerade
+        # beruhigter wird vom Nachbarn sofort wieder angesteckt.
+        fighters = [p for p in adults if p.rage and not p.recruited]
         threatened = [
             e["pet"] for e in pets
             if e["pet"].baby and e["pet"].needs_defense > 0

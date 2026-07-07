@@ -224,6 +224,56 @@ def test_start_death_is_noop_when_already_dying(pet):
     assert pet.death_timer == 5
 
 
+# -- Gruppen-Combat: Rekrutierung / Aufschaukelung --------------------------
+
+def test_click_rage_is_genuine_not_recruited(pet):
+    pet.on_click(config.RAGE_THRESHOLD)
+    assert pet.rage
+    assert not pet.recruited  # selbst wuetend -> rekrutiert Nachbarn
+
+
+def test_provoke_marks_recruited(pet):
+    pet.provoke_to_fight(config.RAGE_THRESHOLD)
+    assert pet.rage
+    assert pet.recruited  # nur reingezogen -> zieht selbst niemanden nach
+
+
+def test_recruited_flag_clears_when_rage_ends(pet):
+    pet.provoke_to_fight(config.RAGE_THRESHOLD)
+    assert pet.rage and pet.recruited
+    # Rage bis zum harten Deckel altern lassen, dann muss sie enden.
+    pet.hits_landed = config.RAGE_HITS_TO_CALM
+    for _ in range(config.RAGE_MAX_DURATION + 5):
+        pet._update_mood()
+    assert not pet.rage
+    assert not pet.recruited
+
+
+def _rally_sources(pets):
+    """Wie main: nur selbst wuetende (nicht rekrutierte) Kaempfer rekrutieren."""
+    return [p for p in pets if p.rage and not p.recruited]
+
+
+def test_group_brawl_winds_down_after_instigator_calms(pet):
+    # Ein Anstifter (per Klick) und ein Nachbar, den er hineinzieht.
+    instigator = pet
+    neighbor = Pet(BOUNDS)
+    neighbor.personality = {t: 1.0 for t in config.PERSONALITY_TRAITS}
+
+    instigator.on_click(config.RAGE_THRESHOLD)
+    assert _rally_sources([instigator, neighbor]) == [instigator]
+
+    # Nachbar wird hineingezogen (genug fuer Rage).
+    neighbor.provoke_to_fight(config.RAGE_THRESHOLD)
+    assert neighbor.rage and neighbor.recruited
+
+    # Anstifter beruhigt sich. Jetzt darf NIEMAND mehr rekrutieren — der
+    # rekrutierte Nachbar zieht den Anstifter nicht zurueck in den Kampf.
+    instigator.rage = False
+    instigator.recruited = False
+    assert _rally_sources([instigator, neighbor]) == []
+
+
 # -- Mood-Prioritaet --------------------------------------------------------
 
 @pytest.mark.parametrize(
