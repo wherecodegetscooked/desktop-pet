@@ -322,6 +322,29 @@ SOCIAL_CHANCE = 0.004                # Per-frame base chance to wander to anothe
 SOCIAL_REACH = 30                    # Distance (px) at which a greeting happens.
 SOCIAL_GREET_LOVE = 1.6              # Love gained from a friendly greeting.
 
+# Neutrale Begegnungen -------------------------------------------------------
+# Kommen sich zwei ruhige, idle Pets von selbst nahe (ohne extra hinzuwandern),
+# begruessen sie sich gelegentlich kurz: ein Stopp, ein "!"-Emote, dann weiter.
+# Rein transient, nichts wird persistiert (wie Kampf/Physik auch nicht).
+GREET_DISTANCE = 48                  # Naehe (px), ab der sich zwei ruhige Pets begruessen.
+GREET_CHANCE = 0.02                  # Chance pro Frame auf eine Begruessung in Reichweite.
+GREET_COOLDOWN = 300                 # Frames Ruhe nach einer Begruessung (~5s).
+GREET_PAUSE = 24                     # Frames kurzer Stopp waehrend des Begruessens.
+GREET_COLOR = (250, 224, 120, 255)   # Farbe des "!"-Begruessungs-Emotes.
+
+# Nacht-Kuscheln -------------------------------------------------------------
+# Nachts (lokale Uhrzeit) legen sich ruhige Pets lieber nebeneinander schlafen,
+# statt einzeln zu doesen. Bei mehreren Pets erhoeht das die Chance, dass ein
+# ruhiger Pet zu einem nahen Partner wandert und sich neben ihn legt. Weckt ihn
+# echte Eingabe (Maus/Tastatur), stehen alle wie beim normalen AFK-Schlaf auf.
+NIGHT_START_HOUR = 23                # Ab dieser Stunde (inkl.) gilt es als Nacht.
+NIGHT_END_HOUR = 6                   # Bis zu dieser Stunde (exkl.) gilt es als Nacht.
+HUDDLE_RADIUS = 260                  # Ein Partner in dieser Naehe lockt zum Kuscheln.
+HUDDLE_REACH = 42                    # So nah legt er sich neben den Partner.
+HUDDLE_CHANCE = 0.005                # Chance pro Frame nachts, einen Schlafplatz zu suchen.
+HUDDLE_SPEED = 1.3                   # Gehtempo zum Kuschel-Partner.
+HUDDLE_WAKE_IDLE = 2.0               # Sek. seit letzter Eingabe, unter denen Kuscheln endet.
+
 # Idle / AFK sleep ----------------------------------------------------------
 # When the whole machine sees no keyboard or mouse for this long, the pet curls
 # up and sleeps (Zzz particles). Any input wakes it. Tune AFK_SLEEP_SECONDS down

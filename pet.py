@@ -5,6 +5,7 @@ talking/anger/particle bookkeeping, and the platform-jumping AI. It holds no
 windowing or drawing code; the overlay renders whatever the pet's fields say.
 """
 
+import datetime
 import math
 import random
 
@@ -134,6 +135,17 @@ from config import (
     SOCIAL_CHANCE,
     SOCIAL_GREET_LOVE,
     SOCIAL_REACH,
+    GREET_DISTANCE,
+    GREET_CHANCE,
+    GREET_COOLDOWN,
+    GREET_PAUSE,
+    NIGHT_START_HOUR,
+    NIGHT_END_HOUR,
+    HUDDLE_RADIUS,
+    HUDDLE_REACH,
+    HUDDLE_CHANCE,
+    HUDDLE_SPEED,
+    HUDDLE_WAKE_IDLE,
     SPEAK_CHANCE,
     SPEAK_COOLDOWN_MAX,
     SPEAK_COOLDOWN_MIN,
@@ -165,6 +177,21 @@ class State:
     WALK = "WALK"
     RUN = "RUN"
     JUMP = "JUMP"
+
+
+def _current_hour():
+    """Aktuelle lokale Stunde (0-23). Als Funktion gekapselt, damit Tests die
+    Nacht-Erkennung ohne echte Systemzeit pruefen koennen."""
+    return datetime.datetime.now().hour
+
+
+def is_night(hour):
+    """Ob `hour` in das Nachtfenster faellt. Robust gegen den Tagesumschlag
+    (z.B. 23-6): liegt der Start hinter dem Ende, gilt der Bereich ueber
+    Mitternacht hinweg."""
+    if NIGHT_START_HOUR <= NIGHT_END_HOUR:
+        return NIGHT_START_HOUR <= hour < NIGHT_END_HOUR
+    return hour >= NIGHT_START_HOUR or hour < NIGHT_END_HOUR
 
 
 class Pet:
@@ -314,6 +341,13 @@ class Pet:
         self.eating = False
         self.eat_timer = 0
         self.happy_timer = 0
+        # Neutrale Begegnungen: kurze spontane Begruessung mit Cooldown, plus
+        # Nacht-Kuscheln (zu einem Partner wandern und daneben einschlafen).
+        self.greet_cooldown = 0
+        self.greet_pause = 0
+        self.huddling = False
+        self.huddle_target_x = 0.0
+        self.huddle_sleep = False
         # Breeding: babies grow from BABY_MIN_SCALE up to full size; courting
         # pets waddle toward a meeting point trading hearts.
         self.baby = False
@@ -573,8 +607,12 @@ class Pet:
         # On a call he stays engaged: never dozes off or gets bored even if you
         # aren't touching the keyboard/mouse while listening.
         on_call = self.activity == "call"
+        # Nacht-Kuschelschlaf haelt den Pet auch unter der AFK-Schwelle schlafend,
+        # bis echte Eingabe (kurz zurueckliegend) ihn — wie alle — aufweckt.
+        if self.huddle_sleep and idle_seconds < HUDDLE_WAKE_IDLE:
+            self.huddle_sleep = False
         want_sleep = (
-            idle_seconds >= AFK_SLEEP_SECONDS
+            (idle_seconds >= AFK_SLEEP_SECONDS or self.huddle_sleep)
             and calm
             and not on_call
             and not self.airborne
@@ -588,6 +626,7 @@ class Pet:
                 self._stop_talking(repick=False)
         elif not want_sleep and self.asleep:
             self.asleep = False
+            self.huddle_sleep = False
             self.spawn_particles("star", 1)
             self.state_timer = random.randint(30, 60)
 
@@ -1728,6 +1767,99 @@ class Pet:
         if self._trait("play") > 1.3 and self.jump_cooldown == 0 and not self.airborne:
             self.start_jump()
 
+    # -- Neutrale Begegnungen (Begruessung & Nacht-Kuscheln) ---------------
+
+    def _calm_idle(self):
+        """Ob der Pet gerade ruhig und ansprechbar ist (idle/walk, keine
+        Sonder-Stimmung, keine laufende Aktion)."""
+        if self.state not in (State.IDLE, State.WALK):
+            return False
+        return not (
+            self.angry or self.rage or self.scared or self.asleep
+            or self.focusing or self.following or self.courting
+            or self.curious or self.tumbling or self.righting
+            or self.snack_target is not None or self.talking
+        )
+
+    def _nearest_peer(self, max_dist):
+        """Naechsten Peer (x, y, Distanz) innerhalb max_dist zurueckgeben, sonst
+        None. Distanz ueber die echten Mittelpunkte, damit Pets auf weit
+        entfernten Fenster-Ebenen nicht als 'nah' zaehlen."""
+        if not self._peers:
+            return None
+        cx = self.x + WINDOW_W / 2
+        cy = self.y + WINDOW_H / 2
+        best = None
+        for px, py in self._peers:
+            dist = math.hypot(px - cx, py - cy)
+            if dist <= max_dist and (best is None or dist < best[2]):
+                best = (px, py, dist)
+        return best
+
+    def _maybe_greet(self):
+        """Ist ein anderer ruhiger Pet schon von selbst nah, gelegentlich kurz
+        begruessen: stehen bleiben, ein "!"-Emote, dann weiter (mit Cooldown)."""
+        if self.greet_cooldown > 0 or not self._calm_idle():
+            return False
+        peer = self._nearest_peer(GREET_DISTANCE)
+        if peer is None:
+            return False
+        if random.random() > GREET_CHANCE:
+            return False
+        self.facing_right = peer[0] >= (self.x + WINDOW_W / 2)
+        self.vx = 0.0
+        self.state = State.IDLE
+        self.greet_pause = GREET_PAUSE
+        self.greet_cooldown = GREET_COOLDOWN
+        self.spawn_particles("greet", 1)
+        return True
+
+    def _maybe_night_huddle(self):
+        """Nachts und mit mindestens einem Nachbarn: gelegentlich zu einem nahen
+        Partner wandern, um sich neben ihn zu legen (statt einzeln zu doesen)."""
+        if self.huddling or self.asleep or not self._calm_idle():
+            return False
+        # Nur im Doese-Kontext (ruhige Maschine), nicht mitten in aktiver Nutzung.
+        if self.idle_seconds < BORED_SECONDS:
+            return False
+        if not is_night(_current_hour()):
+            return False
+        peer = self._nearest_peer(HUDDLE_RADIUS)
+        if peer is None:
+            return False
+        if random.random() > HUDDLE_CHANCE * self._trait("social"):
+            return False
+        self.huddle_target_x = peer[0]
+        self.huddling = True
+        return True
+
+    def _update_huddle(self):
+        """Zum Kuschel-Partner laufen; angekommen daneben einschlafen."""
+        if self.angry or self.rage or self.scared or not is_night(_current_hour()):
+            self.huddling = False
+            return
+        if self._peers:
+            peer = self._nearest_peer(HUDDLE_RADIUS)
+            if peer is not None:
+                self.huddle_target_x = peer[0]
+        dx = self.huddle_target_x - self._feet_x()
+        if abs(dx) <= HUDDLE_REACH:
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.facing_right = dx >= 0
+            self.huddling = False
+            self.asleep = True
+            self.huddle_sleep = True
+            self.zzz_timer = random.randint(ZZZ_INTERVAL_MIN, ZZZ_INTERVAL_MAX)
+            if self.talking:
+                self._stop_talking(repick=False)
+            return
+        direction = 1 if dx > 0 else -1
+        self.vx = direction * HUDDLE_SPEED
+        self.facing_right = direction > 0
+        self.state = State.WALK
+        self.state_timer = 20
+
     # -- Breeding (courtship & growing up) ---------------------------------
 
     def make_baby(self, parent_a, parent_b):
@@ -1998,6 +2130,7 @@ class Pet:
         self.jump_cooldown = max(0, self.jump_cooldown - 1)
         self.speech_cooldown = max(0, self.speech_cooldown - 1)
         self.happy_timer = max(0, self.happy_timer - 1)
+        self.greet_cooldown = max(0, self.greet_cooldown - 1)
         self._update_face()
         self._update_particles()
 
@@ -2103,10 +2236,21 @@ class Pet:
             elif self.curious and grounded and mouse is not None:
                 self._update_curious(mouse)
             else:
-                if self.socializing:
+                if self.greet_pause > 0:
+                    # Kurzer Begruessungs-Stopp: still stehen bleiben.
+                    self.greet_pause -= 1
+                    self.vx = 0.0
+                    self.state = State.IDLE
+                elif self.huddling:
+                    self._update_huddle()
+                elif self.socializing:
                     self._update_social()
                 elif self.following:
                     self._update_follow(mouse)
+                elif grounded and self._maybe_greet():
+                    pass
+                elif grounded and self._maybe_night_huddle():
+                    self._update_huddle()
                 elif grounded and self._maybe_socialize():
                     pass
                 elif mouse is not None and grounded:
@@ -2116,6 +2260,8 @@ class Pet:
                     not self.following
                     and not self.socializing
                     and not self.courting
+                    and not self.huddling
+                    and self.greet_pause == 0
                     and grounded
                 ):
                     if not self._maybe_drop_through_platform():
