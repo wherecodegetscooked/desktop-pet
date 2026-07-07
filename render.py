@@ -742,7 +742,106 @@ def _draw_laptop(small, body_y, frame):
     px(small, 8 if (frame // 6) % 2 else 11, base_y, LAPTOP_KEY)
 
 
+def pet_cache_key(pet):
+    """Alle Felder, die das gezeichnete Sprite bestimmen, als Tupel gebündelt.
+
+    Gleicher Key = pixelidentisches Bild, also darf die zwischengespeicherte
+    Surface wiederverwendet und in main.py der CGImage-Push übersprungen werden.
+    Frame-abhängige Animations-Buckets kommen nur rein, wo sie das aktuelle Bild
+    wirklich verändern — so behält ein ruhender/schlafender Pet einen stabilen
+    Key und verursacht kein Redraw pro Frame."""
+    state = pet.state
+    # Lauf-/Bein-Takt: nur beim Gehen/Rennen bewegt sich etwas.
+    if state in (State.WALK, State.RUN):
+        step_speed = 7 if state == State.WALK else 4
+        step_bucket = (pet.frame // step_speed) % 2
+    else:
+        step_bucket = 0
+    # Arm-Schwung gilt in allen Zuständen ausser IDLE (dort fix bei 0).
+    arm_bucket = (pet.frame // 7) % 2 if state != State.IDLE else 0
+
+    calm = not (
+        pet.asleep
+        or pet.angry
+        or pet.rage
+        or pet.scared
+        or pet.tumbling
+        or pet.righting
+    )
+    activity = pet.activity if calm else None
+    music = pet.music if calm else False
+    # Der Laptop-Prop "tippt" im 6er-Takt — nur dann zählt der Frame dafür.
+    type_bucket = (pet.frame // 6) % 2 if (calm and activity == "work") else 0
+
+    # look_offset/blink bewegen nur die "normalen"/Blinzel-/Love-Augen; in den
+    # fixierten Mood-Augen (Schlaf, Angst, aufgeregt, neugierig, gelangweilt)
+    # ignoriert die Zeichnung sie — dort ausmaskieren, damit z.B. ein Schläfer
+    # trotz tickendem Blinzel-Timer einen stabilen Key behält.
+    eyes_fixed = (
+        pet.asleep
+        or (pet.scared and not pet.angry)
+        or pet.excited
+        or (pet.curious and not pet.angry)
+        or pet.bored
+    )
+    look = 0 if eyes_fixed else max(-1, min(1, pet.look_offset))
+    blink_shows = pet.blink and not (
+        eyes_fixed or pet.loved or pet.victory
+    )
+
+    spinning = (
+        pet.tumbling
+        or pet.righting
+        or (pet.dying and pet.death_kind == "fall")
+    )
+    # Rotationswinkel nur in groben Stufen (feiner braucht das Auge nicht) und
+    # nur wenn er sich wirklich dreht.
+    angle_bucket = round(pet.angle / 4.0) if spinning else 0
+
+    # Death-Fade in groben Alpha-Stufen statt jedem einzelnen Timer-Wert.
+    if pet.dying:
+        dmax = max(1, pet.death_max)
+        death_stage = int(255 * pet.death_timer / dmax) >> 3
+    else:
+        death_stage = -1
+
+    # Baby-Skala in Stufen (die Sprite-Grösse ändert sich nur grob sichtbar).
+    growth_bucket = round(min(1.0, max(0.0, pet.growth)) * 40)
+
+    return (
+        state,
+        step_bucket,
+        arm_bucket,
+        type_bucket,
+        pet.facing_right,
+        pet.palette_index,
+        pet.asleep,
+        pet.angry,
+        pet.rage,
+        pet.scared,
+        pet.loved,
+        pet.victory,
+        pet.excited,
+        pet.curious,
+        pet.bored,
+        blink_shows,
+        look,
+        activity,
+        music,
+        growth_bucket,
+        angle_bucket,
+        death_stage,
+    )
+
+
 def draw_pet_frame(pet):
+    # Frame-Cache: hat sich am Aussehen nichts geändert, die zuletzt gezeichnete
+    # Surface direkt zurückgeben statt sie neu aufzubauen (set_at/scale/rotate).
+    key = pet_cache_key(pet)
+    cached = getattr(pet, "_frame_cache", None)
+    if cached is not None and getattr(pet, "_frame_cache_key", None) == key:
+        return cached
+
     small = pygame.Surface((SPRITE_W, SPRITE_H), pygame.SRCALPHA)
     small.fill(CLEAR)
 
@@ -968,4 +1067,6 @@ def draw_pet_frame(pet):
         alpha = max(0, min(255, int(255 * getattr(pet, "death_timer", 0) / dmax)))
         scaled.fill((255, 255, 255, alpha), None, pygame.BLEND_RGBA_MULT)
 
+    pet._frame_cache_key = key
+    pet._frame_cache = scaled
     return scaled

@@ -52,6 +52,7 @@ from render import (
     draw_pet_frame,
     draw_speech_bubble,
     particle_sprite,
+    pet_cache_key,
     weapon_pose,
 )
 from window_tracker import WindowTracker
@@ -143,10 +144,21 @@ def render_pet(entry, display_rects):
     canvas = entry["canvas"]
     fx_canvas = entry["fx_canvas"]
 
-    canvas.fill(CLEAR)
-    canvas.blit(draw_pet_frame(pet), (0, 0))
-    overlay.move(round(pet.x), round(pet.y))
-    overlay.show_surface(canvas)
+    # Nur neu zeichnen/pushen, wenn sich am Aussehen wirklich etwas geändert hat.
+    # Ein ruhender/schlafender Pet behält seinen Key: kein Redraw, kein CGImage-
+    # Push. Bewegt er sich nur (gleicher Key, andere Position), reicht ein move().
+    key = pet_cache_key(pet)
+    appearance_changed = key != entry.get("pet_key")
+    pos = (round(pet.x), round(pet.y))
+    if appearance_changed:
+        canvas.fill(CLEAR)
+        canvas.blit(draw_pet_frame(pet), (0, 0))
+    if pos != entry.get("pet_pos"):
+        overlay.move(*pos)
+        entry["pet_pos"] = pos
+    if appearance_changed:
+        overlay.show_surface(canvas)
+        entry["pet_key"] = key
 
     if pet.talking or pet.particles or pet.weapon or pet.flying or pet.joy_flying:
         origin_x = round(pet.x + WINDOW_W / 2 - FX_W / 2)
