@@ -21,6 +21,15 @@ from config import (
     CURIOUS_SPEED,
     FETCH_REACH_HEIGHT,
     FETCH_SPEED,
+    SNACK_APPROACH_SPEED,
+    SNACK_REACH,
+    SNACK_REACH_HEIGHT,
+    SNACK_LOVE_BOOST,
+    SNACK_PHRASES,
+    EAT_FRAMES,
+    EAT_CRUMB_INTERVAL,
+    HAPPY_DURATION,
+    HAPPY_SPEAK_MULT,
     PALETTES,
     PET_NAMES,
     PLAY_PHRASES,
@@ -299,6 +308,12 @@ class Pet:
         self.social_timer = 0
         self.social_target_x = 0.0
         self._peers = []
+        # Snack: ein Futter-Objekt, das dieser Pet gerade ansteuert/frisst, plus
+        # ein Freude-Timer, der nach dem Essen kurz die Sprech-Lust anhebt.
+        self.snack_target = None
+        self.eating = False
+        self.eat_timer = 0
+        self.happy_timer = 0
         # Breeding: babies grow from BABY_MIN_SCALE up to full size; courting
         # pets waddle toward a meeting point trading hearts.
         self.baby = False
@@ -396,9 +411,11 @@ class Pet:
             return
         if self.state not in (State.IDLE, State.WALK):
             return
-        if random.random() > SPEAK_CHANCE:
+        chance = SPEAK_CHANCE * (HAPPY_SPEAK_MULT if self.happy_timer > 0 else 1.0)
+        if random.random() > chance:
             return
-        self.start_talk(random.choice(self._phrase_pool()))
+        pool = SNACK_PHRASES if self.happy_timer > 0 else self._phrase_pool()
+        self.start_talk(random.choice(pool))
 
     def _update_talking(self):
         """Keep the pet planted while a bubble is up. Returns True if the rest
@@ -974,6 +991,92 @@ class Pet:
             self.facing_right = direction > 0
             self.state = State.RUN
             self.state_timer = 20
+
+    # -- Snack / Futter ----------------------------------------------------
+
+    def _can_eat(self):
+        """Ob der Pet gerade ueberhaupt zum Snack laufen/fressen darf — ruhig,
+        nicht kaempfend, nicht fliehend, nicht fliegend."""
+        return not (
+            self.asleep
+            or self.rage
+            or self.angry
+            or self.scared
+            or self.tumbling
+            or self.righting
+            or self.focusing
+            or self.flying
+            or self.joy_flying
+            or self.dying
+            or self.courting
+            or self.fleeing
+        )
+
+    def wants_snack(self, snack):
+        """Ob dieser Pet den Snack ansteuern wuerde: essfaehig, noch keiner unterwegs
+        und der Snack ungefaehr auf seiner Hoehe (nicht weit unter/ueber ihm)."""
+        if snack is None or snack.eaten:
+            return False
+        if self.snack_target is not None:
+            return False
+        if not self._can_eat():
+            return False
+        return abs(snack.y - (self.y + WINDOW_H / 2)) <= SNACK_REACH_HEIGHT
+
+    def send_to_snack(self, snack):
+        """Diesen Pet auf den Snack ansetzen (von main.py fuer den naechsten
+        geeigneten Pet aufgerufen)."""
+        self.snack_target = snack
+        self.eating = False
+        self.eat_timer = 0
+        self.following = False
+        self.socializing = False
+
+    def _update_snack(self):
+        """Zum Snack laufen; angekommen kurz essen, dann verschwindet er und der
+        Pet bekommt seinen Freude-Boost."""
+        snack = self.snack_target
+        if snack is None or snack.eaten or not self._can_eat():
+            self.snack_target = None
+            self.eating = False
+            return
+
+        if self.eating:
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.eat_timer -= 1
+            if self.eat_timer % EAT_CRUMB_INTERVAL == 0:
+                self.spawn_particles("dust", 1)
+            if self.eat_timer <= 0:
+                self._finish_eating(snack)
+            return
+
+        dx = snack.x - self._feet_x()
+        if abs(dx) <= SNACK_REACH:
+            self.vx = 0.0
+            self.facing_right = dx >= 0
+            self.eating = True
+            self.eat_timer = EAT_FRAMES
+            return
+        direction = 1 if dx > 0 else -1
+        self.vx = direction * SNACK_APPROACH_SPEED
+        self.facing_right = direction > 0
+        self.state = State.WALK
+        self.state_timer = 20
+
+    def _finish_eating(self, snack):
+        """Snack aufgegessen: entfernen, Love anheben und kurz happy werden."""
+        snack.eaten = True
+        self.snack_target = None
+        self.eating = False
+        self.love = min(LOVE_MAX, self.love + SNACK_LOVE_BOOST)
+        if self.love >= LOVE_THRESHOLD:
+            self.loved = True
+            self.loved_timer = LOVE_DURATION
+        self.happy_timer = HAPPY_DURATION
+        self.spawn_particles("heart", random.randint(2, 3))
+        if not self.talking and random.random() < 0.5:
+            self.start_talk(random.choice(SNACK_PHRASES))
 
     # -- Combat ------------------------------------------------------------
 
@@ -1894,6 +1997,7 @@ class Pet:
         self.state_timer -= 1
         self.jump_cooldown = max(0, self.jump_cooldown - 1)
         self.speech_cooldown = max(0, self.speech_cooldown - 1)
+        self.happy_timer = max(0, self.happy_timer - 1)
         self._update_face()
         self._update_particles()
 
@@ -1991,6 +2095,9 @@ class Pet:
             elif self.focusing:
                 # Heads-down: stays put (pick_state keeps him calm).
                 pass
+            elif self.snack_target is not None and grounded:
+                # Zum Snack laufen und essen — geht dem Ball/Neugier vor.
+                self._update_snack()
             elif ball is not None and grounded and self._wants_to_play(ball):
                 self._update_fetch(ball)
             elif self.curious and grounded and mouse is not None:

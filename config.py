@@ -415,6 +415,37 @@ FETCH_SPEED = 3.0                    # How fast the pet charges the ball.
 BAT_RANGE = 24                       # Distance (px) at which the pet bats the ball.
 FETCH_REACH_HEIGHT = 90              # Only chase a ball within this vertical reach.
 
+# Snack / Futter ------------------------------------------------------------
+# "Drop a snack" legt einen Snack (Apfel) auf den Desktop. Der naechste ruhige,
+# nicht kaempfende/fliegende Pet laeuft hin, spielt eine kurze Ess-Animation und
+# bekommt danach einen Freude-Boost (etwas Love plus erhoehte Sprech-Lust). Der
+# Snack ist fluechtig — er verschwindet nach dem Essen und wird nicht persistiert.
+SNACK_SCALE = 3
+SNACK_BASE = 8                       # Snack-Sprite-Kantenlaenge in Basispixeln.
+SNACK_WIN = 12 * SNACK_SCALE         # Snack-Overlay-Fenstergroesse in Bildschirmpixeln.
+SNACK_APPLE_COLOR = (226, 68, 60, 255)
+SNACK_APPLE_SHADE = (176, 44, 46, 255)
+SNACK_APPLE_HI = (255, 170, 156, 255)
+SNACK_LEAF_COLOR = (110, 178, 92, 255)
+SNACK_STEM_COLOR = (108, 70, 40, 255)
+SNACK_APPROACH_SPEED = 2.2           # Gehtempo eines Pets zum Snack.
+SNACK_REACH = 24                     # Distanz (px), ab der der Pet den Snack frisst.
+SNACK_REACH_HEIGHT = 90              # Nur Snacks in dieser vertikalen Reichweite ansteuern.
+EAT_FRAMES = 66                      # Laenge der Ess-Animation (~1.1s).
+EAT_CRUMB_INTERVAL = 12              # Frames zwischen Krumen-Partikeln beim Essen.
+SNACK_LOVE_BOOST = 1.6               # Love-Zuwachs nach dem Essen.
+HAPPY_DURATION = 600                 # Frames erhoehter Sprech-Lust nach dem Essen (~10s).
+HAPPY_SPEAK_MULT = 3.0               # Faktor auf SPEAK_CHANCE, solange der Pet happy ist.
+
+SNACK_PHRASES = [
+    "Snack break. Union-approved.",
+    "Best perk in this office.",
+    "Fuel for the sprint.",
+    "This is a working lunch.",
+    "Nom. Productivity restored.",
+    "Catered standup? Yes please.",
+]
+
 # Weapon pixel art ----------------------------------------------------------
 WEAPON_SCALE = 3
 STEEL_COLOR = (206, 212, 224, 255)

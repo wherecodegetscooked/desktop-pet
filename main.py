@@ -27,8 +27,10 @@ import settings_panel
 import updater
 
 from ball import Ball
+from food import Snack
 from config import (
     BALL_WIN,
+    SNACK_WIN,
     BREED_COOLDOWN,
     BUBBLE_GAP,
     CLEAR,
@@ -51,6 +53,7 @@ from overlay import MacOverlay
 from pet import Pet
 from render import (
     draw_ball,
+    draw_snack,
     draw_flight_rig,
     draw_name_tag,
     draw_pet_frame,
@@ -349,6 +352,10 @@ def main():
     # removes it from the menu bar ("Remove ball").
     ball = None
     ball_overlay = None
+    # Snack: ein einzelnes Stueck Futter auf dem Desktop. Der naechste ruhige Pet
+    # laeuft hin und frisst es; danach verschwindet es. Fluechtig, nicht persistiert.
+    snack = None
+    snack_overlay = None
     # Self-update: spawn update.sh, show a bubble briefly, then quit so it can
     # pull the latest and relaunch. Counts down frames before quitting.
     pending_update = 0
@@ -601,6 +608,19 @@ def main():
             elif action == "ball_remove" and ball is not None:
                 ball_overlay.close()
                 ball = None
+            elif action == "snack":
+                if snack_overlay is None:
+                    snack_overlay = MacOverlay(SNACK_WIN, SNACK_WIN, interactive=False)
+                if lead is not None:
+                    # Ein Stueck neben den Leit-Pet legen, sodass er es findet.
+                    sx = lead.x + WINDOW_W / 2 + random.uniform(-140, 140)
+                    sy = lead.y + WINDOW_H - 6
+                else:
+                    sx = (bounds[0] + bounds[2]) / 2
+                    sy = bounds[3] - 6
+                sx = min(max(bounds[0] + 8, sx), bounds[2] - 8)
+                snack = Snack(sx, sy)
+                snack_overlay.reassert_top()
             elif action == "settings":
                 open_settings()
             elif action == "update" and not pending_update:
@@ -679,6 +699,21 @@ def main():
         # Advance the fetch ball before the pets so they react to its new spot.
         if ball is not None:
             ball.update(world)
+
+        # Snack: den naechstgelegenen ruhigen, nicht kaempfenden/fliegenden Pet
+        # ansetzen, falls noch keiner unterwegs ist. Er laeuft selbst hin und isst.
+        if snack is not None and not snack.eaten and not snack.claimed():
+            candidates = [
+                entry["pet"] for entry in pets
+                if entry is not drag_target and entry["pet"].wants_snack(snack)
+            ]
+            if candidates:
+                nearest = min(
+                    candidates,
+                    key=lambda p: abs(snack.x - (p.x + WINDOW_W / 2)),
+                )
+                nearest.send_to_snack(snack)
+                snack.claimed_by = nearest
 
         for entry in pets:
             pet = entry["pet"]
@@ -830,6 +865,19 @@ def main():
             ball_overlay.move(round(ball.x - BALL_WIN / 2), round(ball.y - BALL_WIN / 2))
             ball_overlay.show_surface(draw_ball())
 
+        # Snack zeichnen bzw. nach dem Essen entfernen. Der Byte-Dirty-Check in
+        # show_surface haelt den Push billig (identisches Sprite jeden Frame).
+        if snack is not None:
+            if snack.eaten:
+                snack_overlay.close()
+                snack_overlay = None
+                snack = None
+            else:
+                snack_overlay.move(
+                    round(snack.x - SNACK_WIN / 2), round(snack.y - SNACK_WIN / 2)
+                )
+                snack_overlay.show_surface(draw_snack())
+
         # Einstellungsfenster mit aktuellem Kontext neu zeichnen (nur pushen, wenn
         # sich etwas geaendert hat). Liegt ganz oben.
         if settings_open and settings is not None:
@@ -877,6 +925,8 @@ def main():
                 entry["fx"].reassert_top()
             if ball is not None:
                 ball_overlay.reassert_top()
+            if snack is not None and snack_overlay is not None:
+                snack_overlay.reassert_top()
             last_reassert = now
 
         # After an update was requested, let the "Updating!" bubble show for a

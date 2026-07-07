@@ -16,6 +16,13 @@ from config import (
     BALL_SCALE,
     BALL_SHADE,
     BALL_WIN,
+    SNACK_APPLE_COLOR,
+    SNACK_APPLE_SHADE,
+    SNACK_APPLE_HI,
+    SNACK_LEAF_COLOR,
+    SNACK_STEM_COLOR,
+    SNACK_SCALE,
+    SNACK_WIN,
     BELLY_COLOR,
     BOOM_COLOR,
     BUBBLE_FILL_COLOR,
@@ -715,6 +722,52 @@ def draw_ball():
     canvas.blit(
         sprite,
         ((BALL_WIN - sprite.get_width()) // 2, (BALL_WIN - sprite.get_height()) // 2),
+    )
+    return canvas
+
+
+# Snack-Apfel: Legende a=Apfel s=Schatten h=Glanz l=Blatt t=Stiel.
+_SNACK_PIXELS = [
+    "  t l   ",
+    "  tll   ",
+    " aaaa   ",
+    "haaaaas ",
+    "haaaaaas",
+    "haaaaaas",
+    " aaaaas ",
+    "  aaas  ",
+]
+_SNACK_LEGEND = {
+    "a": SNACK_APPLE_COLOR,
+    "s": SNACK_APPLE_SHADE,
+    "h": SNACK_APPLE_HI,
+    "l": SNACK_LEAF_COLOR,
+    "t": SNACK_STEM_COLOR,
+}
+_SNACK_SPRITE = None
+
+
+def draw_snack():
+    """Der Snack (Apfel), zentriert in einem SNACK_WIN-grossen, transparenten
+    Fenster. Statisch — er liegt einfach da, bis ein Pet ihn frisst."""
+    global _SNACK_SPRITE
+    if _SNACK_SPRITE is None:
+        h = len(_SNACK_PIXELS)
+        w = max(len(row) for row in _SNACK_PIXELS)
+        base = pygame.Surface((w, h), pygame.SRCALPHA)
+        base.fill(CLEAR)
+        for y, row in enumerate(_SNACK_PIXELS):
+            for x, cell in enumerate(row):
+                color = _SNACK_LEGEND.get(cell)
+                if color is not None:
+                    base.set_at((x, y), color)
+        _SNACK_SPRITE = pygame.transform.scale(base, (w * SNACK_SCALE, h * SNACK_SCALE))
+    canvas = pygame.Surface((SNACK_WIN, SNACK_WIN), pygame.SRCALPHA)
+    canvas.fill(CLEAR)
+    sprite = _SNACK_SPRITE
+    canvas.blit(
+        sprite,
+        ((SNACK_WIN - sprite.get_width()) // 2, (SNACK_WIN - sprite.get_height()) // 2),
     )
     return canvas
 

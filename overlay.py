@@ -346,6 +346,9 @@ class MacOverlay:
         self._add_menu_item(
             menu, "Remove ball", "", self.menu_controller, b"removeBall:"
         )
+        self._add_menu_item(
+            menu, "Drop a snack", "d", self.menu_controller, b"dropSnack:"
+        )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
             menu, "Breed", "b", self.menu_controller, b"breed:"
@@ -442,6 +445,7 @@ class MacOverlay:
             (b"stopFocus:", "focus_stop"),
             (b"tossBall:", "ball"),
             (b"removeBall:", "ball_remove"),
+            (b"dropSnack:", "snack"),
             (b"openSettings:", "settings"),
             (b"updateApp:", "update"),
         ):
