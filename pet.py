@@ -277,6 +277,11 @@ class Pet:
         # Temperament: scales idle/speed/jump/social/anger/play. Bred children
         # inherit a blend (see inherit_personality).
         self.personality = dict(random.choice(PERSONALITIES))
+        # Abstammung: 0 = wild geboren, sonst max(Eltern-Generation)+1; parents
+        # haelt die Eltern-Namen. Gesetzt in make_baby, persistiert ueber
+        # Neustarts (siehe persistence, Stammbaum-Menue).
+        self.generation = 0
+        self.parents = []
         # Social wandering toward other pets.
         self.socializing = False
         self.social_timer = 0

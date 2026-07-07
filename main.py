@@ -20,6 +20,7 @@ import time
 import pygame
 
 import activity
+import persistence
 import playback
 import updater
 
@@ -255,8 +256,24 @@ def main():
     window_tracker = WindowTracker(display_rects, bounds)
     platforms = window_tracker.platforms()
 
-    # The first pet reuses the menu-owning primary overlay created above.
-    pets = [spawn_pet(bounds, platforms, overlay=primary)]
+    # Zustand vom letzten Lauf wiederherstellen: gespeicherte Pets neu erzeugen
+    # (durch MAX_PETS begrenzt). Der erste Pet uebernimmt das Menue-Fenster.
+    # Fehlt die Datei oder ist sie leer/kaputt, wie bisher genau ein Default-Pet.
+    saved_state = persistence.load()
+    saved_pets = saved_state.get("pets") or []
+    pets = []
+    for data in saved_pets[:MAX_PETS]:
+        if not isinstance(data, dict):
+            continue
+        overlay = primary if not pets else None
+        entry = spawn_pet(
+            bounds, platforms, x=data.get("x"), y=data.get("y"), overlay=overlay
+        )
+        persistence.apply_dict(entry["pet"], data)
+        entry["pet"].place_on_best_platform(platforms)
+        pets.append(entry)
+    if not pets:
+        pets = [spawn_pet(bounds, platforms, overlay=primary)]
 
     # The menu-owning window is special: it hosts the status-bar menu, so it must
     # stay alive even when every pet is removed. We never close it — when its pet
@@ -642,6 +659,13 @@ def main():
                 running = False
 
         clock.tick(FPS)
+
+    # Zustand aller lebenden Pets sichern, damit sie beim naechsten Start wieder
+    # da sind (Name, Palette, Temperament, Position, Abstammung, Waffe, Baby).
+    persistence.save({
+        "version": persistence.STATE_VERSION,
+        "pets": [persistence.pet_to_dict(e["pet"]) for e in living_pets()],
+    })
 
     playback_monitor.stop()
     pygame.quit()
