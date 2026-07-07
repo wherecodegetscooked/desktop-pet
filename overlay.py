@@ -310,6 +310,9 @@ class MacOverlay:
         )
         self._add_menu_item(menu, "Recolour", "c", self.menu_controller, b"recolour:")
         self._add_menu_item(menu, "Rename", "n", self.menu_controller, b"renamePet:")
+        self._add_menu_item(
+            menu, "Über diesen Pet", "", self.menu_controller, b"aboutPet:"
+        )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
             menu, "Breed", "b", self.menu_controller, b"breed:"
@@ -414,6 +417,7 @@ class MacOverlay:
             (b"removeBall:", "ball_remove"),
             (b"recolour:", "recolour"),
             (b"renamePet:", "rename"),
+            (b"aboutPet:", "about"),
             (b"openSettings:", "settings"),
             (b"updateApp:", "update"),
         ):

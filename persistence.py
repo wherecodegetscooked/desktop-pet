@@ -18,6 +18,9 @@ from config import PALETTES, PERSONALITY_TRAITS
 
 STATE_VERSION = 1
 
+# Lifetime-Stats (siehe Stats-Menue). Liegen in derselben Datei wie die Pets.
+STAT_DEFAULTS = {"victories": 0, "balls": 0, "playtime_seconds": 0.0}
+
 
 def state_dir():
     return os.path.expanduser("~/Library/Application Support/Desktop Pet")
@@ -116,6 +119,19 @@ def load_pets():
     """Bequemer Zugriff auf die gespeicherte Pet-Liste (immer eine Liste)."""
     pets = load().get("pets")
     return pets if isinstance(pets, list) else []
+
+
+def load_stats():
+    """Die persistierten Lifetime-Zaehler laden, defensiv auf die Defaults
+    aufgefuellt (fehlende/kaputte Werte -> Default)."""
+    raw = load().get("stats")
+    stats = dict(STAT_DEFAULTS)
+    if isinstance(raw, dict):
+        for key in STAT_DEFAULTS:
+            val = raw.get(key)
+            if isinstance(val, (int, float)) and not isinstance(val, bool) and val >= 0:
+                stats[key] = val
+    return stats
 
 
 def save(state):

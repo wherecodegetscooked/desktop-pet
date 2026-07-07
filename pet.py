@@ -283,6 +283,10 @@ class Pet:
         # Neustarts (siehe persistence, Stammbaum-Menue).
         self.generation = 0
         self.parents = []
+        # Lifetime-Ereigniszaehler: hochgezaehlt vom Pet, pro Frame von der
+        # Hauptschleife als Delta in die globalen Stats gezogen (siehe main).
+        self.stat_victories = 0
+        self.stat_balls = 0
         # Social wandering toward other pets.
         self.socializing = False
         self.social_timer = 0
@@ -948,6 +952,7 @@ class Pet:
             self.state_timer = 18
             self.jump_cooldown = max(self.jump_cooldown, 10)
             self.spawn_particles("star", 1)
+            self.stat_balls += 1  # Ball gefangen/geschlagen
             if random.random() < 0.12:
                 self.start_talk(random.choice(PLAY_PHRASES))
         else:
@@ -1483,6 +1488,7 @@ class Pet:
         self._calm_after_capture()
         self.victory = True
         self.victory_timer = VICTORY_DURATION
+        self.stat_victories += 1  # gewonnener Kampf (Cursor gefangen)
 
     def _calm_after_capture(self):
         """Revenge served — drop the weapon and cool right off."""

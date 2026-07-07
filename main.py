@@ -97,6 +97,18 @@ def _confirm_remove_all(count):
     return choice == "Remove all"
 
 
+def _format_playtime(seconds):
+    """Sekunden als knappe Spielzeit, z.B. '3h 12m' oder '4m 07s'."""
+    seconds = int(max(0, seconds))
+    hours, rem = divmod(seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
 def pet_under_point(pets, point):
     """Topmost (most recently spawned) pet whose hitbox contains point."""
     if point is None:
@@ -276,6 +288,12 @@ def main():
         pets.append(entry)
     if not pets:
         pets = [spawn_pet(bounds, platforms, overlay=primary)]
+
+    # Lifetime-Zaehler (gewonnene Kaempfe, gefangene Baelle, Gesamt-Spielzeit)
+    # aus derselben Datei wie die Pets. Die Playtime dieser Sitzung kommt beim
+    # Beenden dazu.
+    lifetime = persistence.load_stats()
+    session_start = time.monotonic()
 
     # The menu-owning window is special: it hosts the status-bar menu, so it must
     # stay alive even when every pet is removed. We never close it — when its pet
@@ -463,6 +481,27 @@ def main():
             elif action == "ball_remove" and ball is not None:
                 ball_overlay.close()
                 ball = None
+            elif action == "about" and lead:
+                playtime = lifetime["playtime_seconds"] + (
+                    time.monotonic() - session_start
+                )
+                char = lead.personality.get("name", "?")
+                if lead.generation == 0:
+                    lineage = "wild geboren"
+                else:
+                    parents = ", ".join(lead.parents) if lead.parents else "unbekannt"
+                    lineage = f"Generation {lead.generation}, Eltern: {parents}"
+                updater._alert(
+                    f"{lead.name}\n"
+                    f"Charakter: {char}\n"
+                    f"Abstammung: {lineage}\n\n"
+                    "Lifetime-Statistik (alle Pets):\n"
+                    f"Gewonnene Kaempfe: {lifetime['victories']}\n"
+                    f"Gefangene Baelle: {lifetime['balls']}\n"
+                    f"Gesamt-Spielzeit: {_format_playtime(playtime)}",
+                    ["OK"],
+                    "OK",
+                )
             elif action == "settings":
                 open_settings()
             elif action == "recolour" and lead:
@@ -551,6 +590,12 @@ def main():
                 pet.cursor_grab = None
             if pet.cursor_lock is not None:
                 primary.warp_cursor(*pet.cursor_lock)
+            # Die vom Pet hochgezaehlten Ereignisse als Delta in die globalen
+            # Lifetime-Stats ziehen (der Pet selbst kennt die Persistenz nicht).
+            lifetime["victories"] += pet.stat_victories - entry.get("stat_v", 0)
+            lifetime["balls"] += pet.stat_balls - entry.get("stat_b", 0)
+            entry["stat_v"] = pet.stat_victories
+            entry["stat_b"] = pet.stat_balls
 
         # Group behaviour: pets back each other up. A fighting adult rallies other
         # adults CLOSE to it into the fight, and any adult near a scared baby drops
@@ -686,11 +731,12 @@ def main():
 
         clock.tick(FPS)
 
-    # Zustand aller lebenden Pets sichern, damit sie beim naechsten Start wieder
-    # da sind (Name, Palette, Temperament, Position, Abstammung, Waffe, Baby).
+    # Zustand aller lebenden Pets plus die Lifetime-Stats sichern (eine Datei).
+    lifetime["playtime_seconds"] += time.monotonic() - session_start
     persistence.save({
         "version": persistence.STATE_VERSION,
         "pets": [persistence.pet_to_dict(e["pet"]) for e in living_pets()],
+        "stats": lifetime,
     })
 
     playback_monitor.stop()
