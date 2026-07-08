@@ -164,31 +164,25 @@ def test_make_baby_blends_parents():
     assert baby.palette is config.PALETTES[idx]
     # Waffen-Vorliebe von einem Elternteil.
     assert baby.weapon_pref in (pa.weapon_pref, pb.weapon_pref)
-    # Name: entweder frisch aus dem Pool oder ein Eltern-Name mit "Jr"-Suffix.
-    assert (
-        baby.name in config.PET_NAMES
-        or baby.name.endswith(config.BABY_NAME_SUFFIX)
-    )
 
 
-def test_make_baby_name_suffix_uses_parent_name():
-    # Deterministisch einen "Jr"-Namen erzwingen: random.random() < 0.5.
-    random.seed(0)
+def test_make_baby_records_parent_uids():
+    # make_baby fuehrt die Abstammung ueber stabile uids, nicht ueber Namen; den
+    # Namen selbst vergibt der Aufrufer (main.py), make_baby laesst ihn in Ruhe.
     pa = Pet(BOUNDS)
     pb = Pet(BOUNDS)
-    pa.name, pb.name = "Pixel", "Mochi"
-    names_seen = set()
-    for seed in range(50):
-        random.seed(seed)
-        baby = Pet(BOUNDS)
-        baby.make_baby(pa, pb)
-        names_seen.add(baby.name)
-    jr_names = {n for n in names_seen if n.endswith(config.BABY_NAME_SUFFIX)}
-    # Mindestens ein Jr-Name muss vorkommen und auf einem Eltern-Namen basieren.
-    assert jr_names
-    for n in jr_names:
-        base = n[: -len(config.BABY_NAME_SUFFIX)]
-        assert base in ("Pixel", "Mochi")
+    pa.uid, pb.uid = 7, 9
+    pa.generation, pb.generation = 1, 3
+    baby = Pet(BOUNDS)
+    baby.name = "Bean"
+    baby.make_baby(pa, pb)
+    assert baby.parents == [7, 9]
+    assert baby.generation == 4          # eins ueber dem aelteren Elternteil
+    assert baby.name == "Bean"           # von make_baby unveraendert
+    # Selbst-Zeugung: nur eine Eltern-uid.
+    solo = Pet(BOUNDS)
+    solo.make_baby(pa, pa)
+    assert solo.parents == [7]
 
 
 # -- Death-Timeline ---------------------------------------------------------

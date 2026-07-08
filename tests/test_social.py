@@ -16,6 +16,7 @@ def make_pet(x=200, y=800):
     p = Pet(BOUNDS)
     p.x, p.y = float(x), float(y)
     p.state = State.IDLE
+    p.airborne = False  # geerdet: __init__ kann RNG-abhaengig in der Luft starten
     return p
 
 

@@ -41,13 +41,15 @@ def pet_to_dict(pet):
     Zustand."""
     data = {
         "name": pet.name,
+        "uid": int(getattr(pet, "uid", 0)),
         "palette_index": pet.palette_index,
         "personality": dict(pet.personality),
         "x": round(float(pet.x), 1),
         "y": round(float(pet.y), 1),
         "weapon_pref": pet.weapon_pref,
         "generation": getattr(pet, "generation", 0),
-        "parents": list(getattr(pet, "parents", [])),
+        # Eltern als stabile uids (nicht Namen) — siehe lineage.py.
+        "parents": [int(p) for p in getattr(pet, "parents", []) if isinstance(p, int)],
     }
     # Baby-Stand nur mitschreiben, wenn er noch klein ist — ein erwachsener Pet
     # startet wieder als Erwachsener.
@@ -86,12 +88,18 @@ def apply_dict(pet, data):
     if isinstance(weapon, str) and weapon:
         pet.weapon_pref = weapon
 
+    uid = data.get("uid")
+    if isinstance(uid, int) and uid > 0:
+        pet.uid = uid
+
     gen = data.get("generation")
     if isinstance(gen, int) and gen >= 0:
         pet.generation = gen
     parents = data.get("parents")
     if isinstance(parents, list):
-        pet.parents = [p for p in parents if isinstance(p, str)]
+        # Nur uid-Eltern (int) uebernehmen; Alt-Staende mit Namen (str) werden
+        # verworfen — der Pet wird dann als Wurzel behandelt (siehe main.py).
+        pet.parents = [p for p in parents if isinstance(p, int) and not isinstance(p, bool)]
 
     if data.get("baby"):
         pet.baby = True

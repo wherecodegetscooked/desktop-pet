@@ -22,6 +22,7 @@ import pygame
 import activity
 import config
 import persistence
+import lineage
 import playback
 import settings_panel
 import updater
@@ -284,11 +285,58 @@ def main():
     window_tracker = WindowTracker(display_rects, bounds)
     platforms = window_tracker.platforms()
 
-    # Zustand vom letzten Lauf wiederherstellen: gespeicherte Pets neu erzeugen
-    # (durch MAX_PETS begrenzt). Der erste Pet uebernimmt das Menue-Fenster.
-    # Fehlt die Datei oder ist sie leer/kaputt, wie bisher genau ein Default-Pet.
     saved_state = persistence.load()
     saved_pets = saved_state.get("pets") or []
+
+    # Identitaet & Stammbaum laufen ueber stabile uids, nicht ueber Namen (Namen
+    # duerfen sich wiederholen und dienen nur der Anzeige). Der uid-basierte Stand
+    # traegt "next_uid"; aeltere Staende fuehrten die Abstammung ueber Namen — die
+    # verwerfen wir und lassen den Baum ab jetzt sauber ueber uids neu wachsen.
+    legacy_state = "next_uid" not in saved_state
+    next_uid = [0 if legacy_state else int(saved_state.get("next_uid") or 0)]
+
+    def assign_uid(pet):
+        next_uid[0] += 1
+        pet.uid = next_uid[0]
+
+    # Stammbaum-Register: uid -> {"name","generation","parents":[uid,...]}. Sammelt
+    # ALLE je gelebten Pets (auch verstorbene Ahnen), damit der Baum vollstaendig
+    # bleibt und ueber Neustarts hinweg waechst.
+    family = {}
+    if not legacy_state and isinstance(saved_state.get("family"), dict):
+        for key, rec in saved_state["family"].items():
+            try:
+                uid = int(key)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            gen = rec.get("generation")
+            name = rec.get("name")
+            family[uid] = {
+                "name": name if isinstance(name, str) and name else f"Pet {uid}",
+                "generation": gen if isinstance(gen, int) and gen >= 0 else 0,
+                "parents": [int(p) for p in rec.get("parents", [])
+                            if isinstance(p, int) and not isinstance(p, bool)],
+            }
+
+    def used_names(exclude_uid=None):
+        names = {rec["name"] for uid, rec in family.items() if uid != exclude_uid}
+        names |= {e["pet"].name for e in pets if e["pet"].uid != exclude_uid}
+        return names
+
+    def unique_name(exclude_uid=None):
+        return lineage.unique_name(used_names(exclude_uid), config.PET_NAMES, random)
+
+    def record_family(pet):
+        family[pet.uid] = {
+            "name": pet.name,
+            "generation": pet.generation,
+            "parents": list(pet.parents),
+        }
+
+    # Gespeicherte Pets neu erzeugen (durch MAX_PETS begrenzt). Der erste Pet
+    # uebernimmt das Menue-Fenster. Fehlt die Datei, genau ein Default-Pet.
     pets = []
     for data in saved_pets[:MAX_PETS]:
         if not isinstance(data, dict):
@@ -298,33 +346,39 @@ def main():
             bounds, platforms, x=data.get("x"), y=data.get("y"), overlay=overlay
         )
         persistence.apply_dict(entry["pet"], data)
-        entry["pet"].place_on_best_platform(platforms)
+        pet = entry["pet"]
+        if legacy_state:
+            # Alte namensbasierte Abstammung verwerfen -> saubere Wurzel.
+            pet.parents = []
+            pet.generation = 0
+        if pet.uid <= 0:
+            assign_uid(pet)
+        else:
+            next_uid[0] = max(next_uid[0], pet.uid)
+        pet.place_on_best_platform(platforms)
         pets.append(entry)
     if not pets:
-        pets = [spawn_pet(bounds, platforms, overlay=primary)]
+        default = spawn_pet(bounds, platforms, overlay=primary)
+        assign_uid(default["pet"])
+        pets = [default]
+
+    # Eindeutige, saubere Anzeigenamen sicherstellen: Duplikate (alte Staende
+    # konnten welche haben) und die frueheren "Jr"-Namen bekommen einen frischen.
+    seen = set()
+    for entry in pets:
+        pet = entry["pet"]
+        if pet.name in seen or " Jr" in pet.name:
+            pet.name = unique_name(exclude_uid=pet.uid)
+        seen.add(pet.name)
+
+    for entry in pets:
+        record_family(entry["pet"])
 
     # Lifetime-Zaehler (gewonnene Kaempfe, gefangene Baelle, Gesamt-Spielzeit)
     # aus derselben Datei wie die Pets. Die Playtime dieser Sitzung kommt beim
     # Beenden dazu.
     lifetime = persistence.load_stats()
     session_start = time.monotonic()
-
-    # Stammbaum-Register: name -> {"generation", "parents"}. Sammelt ALLE je
-    # gelebten Pets (auch verstorbene Ahnen), damit der Stammbaum vollstaendig
-    # bleibt und ueber Neustarts hinweg waechst. Aus dem gespeicherten Zustand
-    # geladen und mit den aktuell lebenden Pets aufgefuellt.
-    family = saved_state.get("family")
-    if not isinstance(family, dict):
-        family = {}
-
-    def record_family(pet):
-        family[pet.name] = {
-            "generation": pet.generation,
-            "parents": list(pet.parents),
-        }
-
-    for entry in pets:
-        record_family(entry["pet"])
 
     # The menu-owning window is special: it hosts the status-bar menu, so it must
     # stay alive even when every pet is removed. We never close it — when its pet
@@ -495,8 +549,13 @@ def main():
             menu_overlay_free = False
         else:
             entry = spawn_pet(bounds, platforms, x=x, y=y)
+        pet = entry["pet"]
+        # Jeder neu erzeugte Pet bekommt eine frische uid und einen eindeutigen
+        # Namen (kein "Jr", keine Duplikate). Ein Baby behaelt diesen Namen; nur
+        # Farbe/Waffe/Abstammung ueberschreibt make_baby danach.
+        assign_uid(pet)
+        pet.name = unique_name(exclude_uid=pet.uid)
         if randomize:
-            pet = entry["pet"]
             pet.palette_index = random.randrange(len(config.PALETTES))
             pet.palette = config.PALETTES[pet.palette_index]
             pet.weapon_pref = random.choice(config.WEAPONS)
@@ -543,11 +602,25 @@ def main():
             breed_cooldown = BREED_COOLDOWN
             return
         if a is None or b is None:
-            # Zufaellig zwei Eltern (bei nur einem Pet zeugt es mit sich selbst).
+            # Zufaellig zwei UNVERWANDTE Eltern (bei nur einem Pet zeugt es mit
+            # sich selbst). Kein Inzest: verwandte Paare werden uebersprungen.
             if len(living) == 1:
                 a = b = living[0]
             else:
-                a, b = random.sample(living, 2)
+                pairs = [
+                    (x, y)
+                    for i, x in enumerate(living)
+                    for y in living[i + 1:]
+                    if not lineage.are_related(x["pet"].uid, y["pet"].uid, family)
+                ]
+                if not pairs:
+                    living[0]["pet"].start_talk("Too related!")
+                    return
+                a, b = random.choice(pairs)
+        elif a is not b and lineage.are_related(a["pet"].uid, b["pet"].uid, family):
+            # Vom Panel gezielt gewaehlte, aber verwandte Eltern -> ablehnen.
+            a["pet"].start_talk("Too related!")
+            return
         mid = (a["pet"].x + b["pet"].x) / 2 + WINDOW_W / 2
         a["pet"].court_to(mid)
         if b is not a:
@@ -885,6 +958,7 @@ def main():
             pets_info = [
                 {
                     "id": e["id"],
+                    "uid": e["pet"].uid,
                     "name": e["pet"].name,
                     "palette_index": e["pet"].palette_index,
                     "generation": e["pet"].generation,
@@ -894,21 +968,21 @@ def main():
                 for e in living_pets()
             ]
             if last_click_entry in pets and not last_click_entry["pet"].dying:
-                focus_name = last_click_entry["pet"].name
+                focus_uid = last_click_entry["pet"].uid
             else:
                 living = living_pets()
-                focus_name = living[-1]["pet"].name if living else None
+                focus_uid = living[-1]["pet"].uid if living else None
             playtime = lifetime["playtime_seconds"] + (time.monotonic() - session_start)
-            # Register (name -> {generation, parents}) in das vom Panel erwartete
-            # Format (name -> (generation, [eltern])) bringen.
-            lineage = {
-                name: (rec.get("generation", 0), rec.get("parents", []))
-                for name, rec in family.items()
+            # Register in das vom Panel erwartete Format bringen:
+            # uid -> (name, generation, [eltern-uids]).
+            lineage_info = {
+                uid: (rec.get("name", "?"), rec.get("generation", 0), rec.get("parents", []))
+                for uid, rec in family.items()
             }
             settings.set_context(
                 pets_info,
-                lineage,
-                focus_name,
+                lineage_info,
+                focus_uid,
                 stats={
                     "victories": lifetime["victories"],
                     "balls": lifetime["balls"],
@@ -942,9 +1016,12 @@ def main():
     lifetime["playtime_seconds"] += time.monotonic() - session_start
     persistence.save({
         "version": persistence.STATE_VERSION,
+        "next_uid": next_uid[0],
         "pets": [persistence.pet_to_dict(e["pet"]) for e in living_pets()],
         "stats": lifetime,
-        "family": family,
+        # family ist uid-keyed; json macht die int-Schluessel zu Strings, beim
+        # Laden werden sie wieder zu int geparst (siehe oben).
+        "family": {str(uid): rec for uid, rec in family.items()},
     })
 
     playback_monitor.stop()

@@ -283,7 +283,6 @@ COURT_MEET_HEART_CHANCE = 0.55       # Per-frame heart chance during the meeting
 BABY_MIN_SCALE = 0.42                # How small a newborn starts (fraction of adult).
 BABY_GROW_DELAY = 2400               # Frames it stays tiny before growing (~40s).
 BABY_GROW_FRAMES = 3000              # Frames to grow to full after the delay (~50s).
-BABY_NAME_SUFFIX = " Jr"             # Appended when a baby takes a parent's name.
 # Babies are defenceless: a click/attack scares them into running away and hiding
 # instead of arming up, and it flags nearby adults to come to the rescue.
 BABY_FLEE_SPEED = 2.6                # Run speed while fleeing a threat.

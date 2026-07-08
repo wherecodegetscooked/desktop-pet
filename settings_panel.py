@@ -17,6 +17,7 @@ import pygame
 
 import breeding
 import config
+import lineage
 import persistence
 from config import WEAPONS
 from render import render_pixel_text, GLYPH_H, SPACE_W, GLYPH_GAP, GLYPH_W
@@ -136,21 +137,21 @@ class SettingsPanel:
         self.dirty = True
         # Kontext von main (pro Frame gesetzt).
         self.pets = []                 # [{"id","name","palette_index","generation","baby"}]
-        self.lineage = {}              # name -> (generation, [eltern])
-        self.focus_name = None
+        self.lineage = {}              # uid -> (name, generation, [eltern-uids])
+        self.focus_uid = None
         self.stats = {}                # {"victories","balls","playtime"}
 
     # -- Kontext / Aktionen ------------------------------------------------
 
-    def set_context(self, pets, lineage, focus_name, stats=None):
+    def set_context(self, pets, lineage, focus_uid, stats=None):
         stats = stats or {}
-        if (pets, lineage, focus_name, stats) != (
-            self.pets, self.lineage, self.focus_name, self.stats
+        if (pets, lineage, focus_uid, stats) != (
+            self.pets, self.lineage, self.focus_uid, self.stats
         ):
             self.dirty = True
         self.pets = pets
         self.lineage = lineage
-        self.focus_name = focus_name
+        self.focus_uid = focus_uid
         self.stats = stats
 
     def pop_actions(self):
@@ -351,8 +352,9 @@ class SettingsPanel:
                             "rect": (16, y, bx - 16, self.PET_ROW_H - 4)})
             y += self.PET_ROW_H
 
-        # Zuchten-Button, sobald genau zwei ausgewaehlt sind.
-        if len(self.breed_selection) == 2:
+        # Zuchten-Button nur, wenn genau zwei ausgewaehlt UND nicht verwandt sind
+        # (kein Inzest). Bei zu enger Verwandtschaft bleibt der Button weg.
+        if len(self.breed_selection) == 2 and not self._selection_related():
             widgets.append({
                 "kind": "button",
                 "action": ("breed", self.breed_selection[0], self.breed_selection[1]),
@@ -360,6 +362,21 @@ class SettingsPanel:
                 "label": "Zuchten", "style": "accent",
             })
         return widgets
+
+    def _family_graph(self):
+        """self.lineage (uid -> (name, gen, [eltern])) in das von lineage.py
+        erwartete Format (uid -> {"parents": [...]}) bringen."""
+        return {uid: {"parents": rec[2]} for uid, rec in self.lineage.items()}
+
+    def _selection_related(self):
+        """Ob die zwei aktuell ausgewaehlten Pets zu eng verwandt sind."""
+        if len(self.breed_selection) != 2:
+            return False
+        a = self._pet_by_id(self.breed_selection[0])
+        b = self._pet_by_id(self.breed_selection[1])
+        if a is None or b is None:
+            return False
+        return lineage.are_related(a["uid"], b["uid"], self._family_graph())
 
     # -- Zeichnen ----------------------------------------------------------
 
@@ -509,6 +526,12 @@ class SettingsPanel:
         a, b = self._pet_by_id(sel[0]), self._pet_by_id(sel[1])
         if a is None or b is None:
             return
+        if self._selection_related():
+            _blit_text(surf, "Zu eng verwandt", self.W // 2, by + bh // 2 - 14,
+                       DANGER, ts=2, align="center")
+            _blit_text(surf, "kein Inzest — andere Eltern waehlen",
+                       self.W // 2, by + bh // 2 + 6, MUTED, ts=1, align="center")
+            return
         _blit_text(surf, f"Zucht-Vorschau: {a['name']} + {b['name']}",
                    bx + 14, by + 8, TEXT, ts=2)
 
@@ -538,59 +561,75 @@ class SettingsPanel:
                 _blit_text(surf, f"{round(p * 100)}%", wpn_x + 110, ry, MUTED,
                            ts=1, align="right")
 
-    def _draw_tree(self, surf):
-        """Stammbaum als verbundene Kaestchen: Eltern/Ahnen OBEN, das gewaehlte
-        Pet UNTEN, mit Verbindungslinien. Speist sich aus dem vollstaendigen
-        Familienregister, also auch verstorbene Ahnen erscheinen."""
-        if not self.focus_name:
-            _blit_text(surf, "Kein Pet ausgewaehlt.", self.W // 2, 200, MUTED,
-                       ts=2, align="center")
-            return
-        _blit_text(surf, f"Stammbaum: {self.focus_name}", self.W // 2, 100, TEXT,
-                   ts=2, align="center")
-
-        # Ahnen-Ebenen aufbauen (Ebene 0 = Fokus-Pet, dann Eltern, Grosseltern …).
-        levels = [[self.focus_name]]
+    def _tree_levels(self):
+        """Ahnen-Ebenen als uid-Listen: Ebene 0 = Fokus-Pet, dann Eltern,
+        Grosseltern … Pro Ebene und ueber Ebenen hinweg dedupliziert (ein Ahn
+        erscheint nur einmal), damit gemeinsame Vorfahren und kaputte Zyklen den
+        Baum nicht aufblaehen."""
+        focus = self.focus_uid
+        if focus is None or focus not in self.lineage:
+            return []
+        levels = [[focus]]
+        placed = {focus}
         for _ in range(5):
             nxt = []
-            for name in levels[-1]:
-                _gen, parents = self.lineage.get(name, (None, []))
-                nxt.extend(parents)
+            for uid in levels[-1]:
+                _name, _gen, parents = self.lineage.get(uid, ("?", 0, []))
+                for p in parents:
+                    if p in self.lineage and p not in placed and p not in nxt:
+                        nxt.append(p)
+                        placed.add(p)
             if not nxt:
                 break
             levels.append(nxt)
+        return levels
 
+    def _draw_tree(self, surf):
+        """Stammbaum als verbundene Kaestchen: Eltern/Ahnen OBEN, das gewaehlte
+        Pet UNTEN, mit Verbindungslinien. Ueber stabile uids gefuehrt (Namen
+        koennen sich wiederholen), speist sich aus dem vollstaendigen
+        Familienregister — auch verstorbene Ahnen erscheinen."""
+        focus_name = None
+        if self.focus_uid in self.lineage:
+            focus_name = self.lineage[self.focus_uid][0]
+        if not focus_name:
+            _blit_text(surf, "Kein Pet ausgewaehlt.", self.W // 2, 200, MUTED,
+                       ts=2, align="center")
+            return
+        _blit_text(surf, f"Stammbaum: {focus_name}", self.W // 2, 100, TEXT,
+                   ts=2, align="center")
+
+        levels = self._tree_levels()
         n_levels = len(levels)
         top, bottom = 126, self.H - 64
         row_h = (bottom - top) // max(1, n_levels)
-        positions = {}
-        for li, names in enumerate(levels):
+        positions = {}  # uid -> (cx, cy)
+        for li, uids in enumerate(levels):
             # Invertiert: Ebene 0 (Kind) unten, hoehere Ebenen (Ahnen) oben.
             cy = bottom - li * row_h - row_h // 2
-            n = len(names)
-            for i, name in enumerate(names):
-                cx = int(self.W * (i + 1) / (n + 1))
-                positions[(li, i)] = (cx, cy)
+            n = len(uids)
+            for i, uid in enumerate(uids):
+                positions[uid] = (int(self.W * (i + 1) / (n + 1)), cy)
 
-        # Verbindungslinien Kind (unten) -> Eltern (darueber).
+        # Verbindungslinien Kind (unten) -> Eltern (darueber), ueber die uid
+        # direkt aufgeloest — auch bei gemeinsamen Vorfahren korrekt.
         for li in range(n_levels - 1):
-            cursor = 0
-            for ci, cname in enumerate(levels[li]):
-                _gen, parents = self.lineage.get(cname, (None, []))
-                cx, cy = positions[(li, ci)]
-                for _p in parents:
-                    if (li + 1, cursor) in positions:
-                        px, py = positions[(li + 1, cursor)]
+            for uid in levels[li]:
+                _name, _gen, parents = self.lineage.get(uid, ("?", 0, []))
+                cx, cy = positions[uid]
+                for p in parents:
+                    if p in positions:
+                        px, py = positions[p]
                         pygame.draw.line(surf, BORDER, (cx, cy - 14), (px, py + 14), 2)
-                    cursor += 1
 
-        for li, names in enumerate(levels):
-            n = len(names)
-            node_w = min(120, max(64, (self.W - 40) // max(1, n) - 8))
-            for i, name in enumerate(names):
-                cx, cy = positions[(li, i)]
-                gen, _parents = self.lineage.get(name, (None, []))
-                self._draw_tree_node(surf, cx, cy, name, gen, li == 0, node_w)
+        for li, uids in enumerate(levels):
+            n = len(uids)
+            node_w = min(140, max(64, (self.W - 40) // max(1, n) - 8))
+            for uid in uids:
+                cx, cy = positions[uid]
+                name, gen, _parents = self.lineage.get(uid, ("?", 0, []))
+                self._draw_tree_node(surf, cx, cy, name, gen, uid == self.focus_uid,
+                                     node_w)
 
     def _draw_tree_node(self, surf, cx, cy, name, gen, focus, node_w):
         max_chars = max(3, (node_w - 12) // (GLYPH_W + GLYPH_GAP) // 2)

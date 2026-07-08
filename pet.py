@@ -99,7 +99,6 @@ from config import (
     COURT_PHRASES,
     BABY_GROW_DELAY,
     BABY_GROW_FRAMES,
-    BABY_NAME_SUFFIX,
     BABY_PHRASES,
     BABY_FLEE_SPEED,
     BABY_FLEE_DURATION,
@@ -321,9 +320,11 @@ class Pet:
         # Temperament: scales idle/speed/jump/social/anger/play. Bred children
         # inherit a blend (see inherit_personality).
         self.personality = dict(random.choice(PERSONALITIES))
-        # Abstammung: 0 = wild geboren, sonst max(Eltern-Generation)+1; parents
-        # haelt die Eltern-Namen. Gesetzt in make_baby, persistiert ueber
-        # Neustarts (siehe persistence, Stammbaum-Menue).
+        # Identitaet: stabile, eindeutige uid (von main.py vergeben, persistiert).
+        # Der Name ist rein kosmetisch — nur die uid taugt als Schluessel fuer
+        # Stammbaum und Verwandtschaft (siehe lineage.py). Abstammung: 0 = wild
+        # geboren, sonst max(Eltern-Generation)+1; parents haelt die Eltern-uids.
+        self.uid = 0
         self.generation = 0
         self.parents = []
         # Lifetime-Ereigniszaehler: hochgezaehlt vom Pet, pro Frame von der
@@ -1864,8 +1865,10 @@ class Pet:
 
     def make_baby(self, parent_a, parent_b):
         """Turn this freshly-spawned pet into parent_a & parent_b's child:
-        inherit a blended temperament, one parent's colours, a name (sometimes a
-        'Jr' of a parent's), and a weapon taste — then start tiny and grow up."""
+        inherit a blended temperament, one parent's colours, and a weapon taste,
+        then start tiny and grow up. Den (immer frischen, eindeutigen) Namen und
+        die uid vergibt der Aufrufer (main.py) — hier wird nur die Abstammung
+        ueber die stabilen Eltern-uids festgehalten."""
         self.inherit_personality(parent_a.personality, parent_b.personality)
         # Farbe und Waffe nach dem Vererbungsmodell (je 45% Elternteil, 10%
         # Mutation) — dieselben Verteilungen zeigt die Zucht-Vorschau im Panel.
@@ -1876,18 +1879,13 @@ class Pet:
         self.weapon_pref = breeding.choose_weapon(
             parent_a.weapon_pref, parent_b.weapon_pref
         )
-        # Name: half the time a parent's name with a 'Jr', else a fresh one.
-        if random.random() < 0.5:
-            self.name = random.choice([parent_a.name, parent_b.name]) + BABY_NAME_SUFFIX
-        else:
-            self.name = random.choice(PET_NAMES)
-        # Abstammung festhalten: Generation eins ueber dem aelteren Elternteil,
-        # Eltern-Namen fuer den Stammbaum (bei Selbst-Zeugung nur ein Name).
+        # Abstammung ueber die Eltern-uids festhalten: Generation eins ueber dem
+        # aelteren Elternteil (bei Selbst-Zeugung nur eine uid).
         self.generation = max(parent_a.generation, parent_b.generation) + 1
         if parent_a is parent_b:
-            self.parents = [parent_a.name]
+            self.parents = [parent_a.uid]
         else:
-            self.parents = [parent_a.name, parent_b.name]
+            self.parents = [parent_a.uid, parent_b.uid]
         self.baby = True
         self.growth = 0.0
         self.baby_age = 0
