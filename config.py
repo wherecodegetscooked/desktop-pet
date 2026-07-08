@@ -73,7 +73,7 @@ SPEECH_MIN_FRAMES = 150              # Shortest time a bubble stays up (~2.5s).
 SPEECH_PER_CHAR = 6                  # Extra frames shown per character of text.
 
 # Pixel speech bubble dimensions.
-BUBBLE_SCALE = 3                     # Nearest-neighbour upscale for the pixel look.
+BUBBLE_SCALE = 2                     # Nearest-neighbour upscale (kleiner = kompaktere Blase + Schrift).
 BUBBLE_MAX_TEXT_W = 96               # Wrap width in base (pre-scale) pixels.
 BUBBLE_TEXT_COLOR = (40, 30, 28, 255)
 BUBBLE_FILL_COLOR = (255, 250, 235, 255)
