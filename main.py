@@ -437,7 +437,7 @@ def main():
     def pet_entry_by_id(pid):
         return next((e for e in pets if e.get("id") == pid), None)
 
-    def on_settings_mouse(phase, wx, wy):
+    def on_settings_mouse(phase, wx, wy, delta=0.0):
         """Maus-Event auf dem Einstellungsfenster (Fensterkoordinaten, unten-links).
         Wandelt in Panel-lokale Koordinaten (oben-links) und verteilt an das Panel.
         Rueckgabe True = Event verschluckt; False = an AppKit (z.B. Titelleiste
@@ -448,6 +448,10 @@ def main():
         in_content = (
             0 <= lx < settings_panel.PANEL_W and 0 <= ly < settings_panel.PANEL_H
         )
+        if phase == "scroll":
+            if not in_content:
+                return False
+            return bool(settings.on_scroll((lx, ly), delta))
         if phase == "down":
             if not in_content:
                 return False  # Titelleiste/Rand -> AppKit verschiebt das Fenster

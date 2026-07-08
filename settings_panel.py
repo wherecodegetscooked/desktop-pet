@@ -130,6 +130,8 @@ class SettingsPanel:
         self.tab = TABS[0]
         self.active_slider = None      # key des gerade gezogenen Sliders
         self.breed_selection = []      # bis zu 2 Pet-ids fuers gezielte Zuchten
+        self.pet_scroll = 0            # Index des ersten sichtbaren Pets (Scroll)
+        self._scroll_accum = 0.0       # aufgelaufener Scroll-Delta bis zur naechsten Zeile
         self._actions = []             # (typ, *args) fuer main
         self._widgets = []
         self._tracks = {}
@@ -254,6 +256,27 @@ class SettingsPanel:
         if self.active_slider is not None:
             self.active_slider = None
 
+    SCROLL_PX_PER_ROW = 22             # aufgelaufene Scroll-Pixel je Zeile
+
+    def _max_pet_scroll(self):
+        return max(0, len(self.pets) - self.PET_ROWS)
+
+    def on_scroll(self, local, delta):
+        """Mausrad/Trackpad ueber der Pet-Liste: die Liste zeilenweise scrollen.
+        `delta` ist die vertikale Scroll-Groesse (AppKit scrollingDeltaY)."""
+        if self.tab != "Pets" or self._max_pet_scroll() == 0:
+            return False
+        # Nach unten scrollen (delta < 0) zeigt spaetere Pets -> Offset groesser.
+        self._scroll_accum += -delta
+        rows = int(self._scroll_accum / self.SCROLL_PX_PER_ROW)
+        if rows:
+            self._scroll_accum -= rows * self.SCROLL_PX_PER_ROW
+            new = max(0, min(self._max_pet_scroll(), self.pet_scroll + rows))
+            if new != self.pet_scroll:
+                self.pet_scroll = new
+                self.dirty = True
+        return True
+
     def _do_button(self, action):
         if action == ("save",):
             self.save()  # prefs.json schreiben + Bestaetigung
@@ -332,8 +355,11 @@ class SettingsPanel:
                         "rect": (156, 96, 150, 26),
                         "label": "Alle entfernen", "style": "danger"})
 
+        # Scroll-Offset auf den gueltigen Bereich klemmen (Pets koennen weniger
+        # geworden sein) und nur das sichtbare Fenster als Zeilen auslegen.
+        self.pet_scroll = max(0, min(self.pet_scroll, self._max_pet_scroll()))
         y = self.PET_ROW_Y
-        for pet in self.pets[:self.PET_ROWS]:
+        for pet in self.pets[self.pet_scroll:self.pet_scroll + self.PET_ROWS]:
             # Aktions-Buttons rechts (zuerst -> werden vor der Auswahl getroffen).
             bx = self.W - 16
             for label, action, style in (
@@ -477,8 +503,11 @@ class SettingsPanel:
         if not self.pets:
             _blit_text(surf, "Keine Pets da.", self.W // 2, 200, MUTED, ts=2,
                        align="center")
+        self.pet_scroll = max(0, min(self.pet_scroll, self._max_pet_scroll()))
+        start = self.pet_scroll
+        visible = self.pets[start:start + self.PET_ROWS]
         y = self.PET_ROW_Y
-        for pet in self.pets[:self.PET_ROWS]:
+        for pet in visible:
             selected = pet["id"] in self.breed_selection
             rect = (16, y, self.W - 32, self.PET_ROW_H - 4)
             _panel_box(surf, rect, CARD_HI if selected else CARD,
@@ -500,17 +529,34 @@ class SettingsPanel:
                 _blit_text(surf, f"{idx}", rect[0] + rect[2] - 200, y + 9,
                            ACCENT, ts=2, align="center")
             y += self.PET_ROW_H
-        if len(self.pets) > self.PET_ROWS:
-            _blit_text(surf,
-                       f"+ {len(self.pets) - self.PET_ROWS} weitere "
-                       f"(die ersten {self.PET_ROWS} steuerbar)",
-                       self.W // 2, y + 2, MUTED, ts=1, align="center")
+
+        # Scrollbar + Zaehler, sobald mehr Pets da sind als Zeilen passen.
+        total = len(self.pets)
+        if total > self.PET_ROWS:
+            last = min(start + self.PET_ROWS, total)
+            _blit_text(surf, f"{start + 1}-{last} von {total}  (scrollen)",
+                       self.W // 2, y - 4, MUTED, ts=1, align="center")
+            self._draw_pet_scrollbar(surf, total)
 
         self._draw_breed_preview(surf)
         # Alle Buttons dieses Tabs zeichnen (Footer-Buttons macht _draw_footer).
+        # (Scrollbar oben gezeichnet, damit sie nicht von Karten verdeckt wird.)
         for w in self._widgets:
             if w["kind"] == "button" and w["action"] not in (("save",), ("close",)):
                 self._draw_button(surf, w)
+
+    def _draw_pet_scrollbar(self, surf, total):
+        """Schlanke Scrollbar im rechten Rand-Gutter der Pet-Liste; der Thumb
+        zeigt Position und sichtbaren Anteil."""
+        x = self.W - 12
+        top = self.PET_ROW_Y
+        height = self.PET_ROWS * self.PET_ROW_H - 8
+        _fill(surf, (x, top, 4, height), CARD)
+        thumb_h = max(20, int(height * self.PET_ROWS / total))
+        max_scroll = self._max_pet_scroll()
+        t = self.pet_scroll / max_scroll if max_scroll else 0
+        thumb_y = top + int((height - thumb_h) * t)
+        _panel_box(surf, (x, thumb_y, 4, thumb_h), ACCENT, ACCENT, 1)
 
     def _draw_breed_preview(self, surf):
         """Zeigt fuer zwei ausgewaehlte Eltern die Wahrscheinlichkeiten, welche

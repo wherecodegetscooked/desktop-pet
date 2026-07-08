@@ -55,3 +55,54 @@ def test_panel_save_writes_valid_prefs(tmp_path, monkeypatch):
     for key, field in config.PREFS_FIELDS.items():
         assert key in data
         assert config._pref_ok(field, data[key]), (key, data[key])
+
+
+def _pets_panel(n):
+    os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+    import pygame
+    pygame.init()
+    import settings_panel
+
+    panel = settings_panel.SettingsPanel()
+    panel.tab = "Pets"
+    panel.pets = [{"id": i, "uid": i, "name": f"P{i}", "palette_index": 0,
+                   "generation": 0, "baby": False, "weapon": "knife"}
+                  for i in range(n)]
+    return panel
+
+
+def test_pet_scroll_advances_and_clamps():
+    panel = _pets_panel(8)                 # 8 Pets, 5 Zeilen -> max Offset 3
+    assert panel._max_pet_scroll() == 3
+    step = panel.SCROLL_PX_PER_ROW
+    # Nach unten scrollen (negatives scrollingDeltaY) -> spaetere Pets.
+    panel.on_scroll((100, 200), -step)
+    assert panel.pet_scroll == 1
+    panel.on_scroll((100, 200), -step * 5)  # weit ueber das Ende hinaus
+    assert panel.pet_scroll == 3            # geklemmt
+    # Zurueck nach oben.
+    panel.on_scroll((100, 200), step * 10)
+    assert panel.pet_scroll == 0
+
+
+def test_pet_scroll_noop_when_all_fit():
+    panel = _pets_panel(3)                  # passt komplett -> kein Scrollen
+    assert panel._max_pet_scroll() == 0
+    assert panel.on_scroll((100, 200), -panel.SCROLL_PX_PER_ROW * 3) is False
+    assert panel.pet_scroll == 0
+
+
+def test_pet_scroll_only_on_pets_tab():
+    panel = _pets_panel(8)
+    panel.tab = "Allgemein"
+    assert panel.on_scroll((100, 200), -panel.SCROLL_PX_PER_ROW) is False
+    assert panel.pet_scroll == 0
+
+
+def test_visible_pet_widgets_follow_scroll():
+    panel = _pets_panel(8)
+    panel.pet_scroll = 2
+    panel._build_widgets()
+    sel_ids = [w["pet_id"] for w in panel._widgets if w["kind"] == "select"]
+    # Genau die 5 sichtbaren Zeilen ab Offset 2 sind interaktiv.
+    assert sel_ids == [2, 3, 4, 5, 6]

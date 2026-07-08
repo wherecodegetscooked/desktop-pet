@@ -32,6 +32,7 @@ from config import (
     NSEVENT_LEFT_MOUSE_DOWN,
     NSEVENT_LEFT_MOUSE_DRAGGED,
     NSEVENT_LEFT_MOUSE_UP,
+    NSEVENT_SCROLL_WHEEL,
     WINDOW_LIST_EXCLUDE_DESKTOP,
     WINDOW_LIST_ON_SCREEN_ONLY,
 )
@@ -672,13 +673,19 @@ class MacOverlay:
                     NSEVENT_LEFT_MOUSE_DOWN: "down",
                     NSEVENT_LEFT_MOUSE_DRAGGED: "drag",
                     NSEVENT_LEFT_MOUSE_UP: "up",
+                    NSEVENT_SCROLL_WHEEL: "scroll",
                 }.get(event_type)
                 if phase is None:
                     return False  # z.B. Titelleisten-Klick -> AppKit macht den Rest
                 loc = _msg(self.objc, event, "locationInWindow", restype=NSPoint)
+                delta = 0.0
+                if phase == "scroll":
+                    delta = _msg(
+                        self.objc, event, "scrollingDeltaY", restype=ctypes.c_double
+                    )
                 # True = verschluckt (kein sendEvent); False = an AppKit weiter
                 # (Fenster verschieben), aber nie als Pet-Drag behandelt.
-                return bool(callback(phase, loc.x, loc.y))
+                return bool(callback(phase, loc.x, loc.y, delta))
 
         if event_type == NSEVENT_LEFT_MOUSE_DOWN:
             self.dragging = True
