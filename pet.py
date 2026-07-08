@@ -61,6 +61,9 @@ from config import (
     GROUND_PLATFORM_NAME,
     IDLE_FX_MAX,
     IDLE_FX_MIN,
+    LEASH_MAX_SPEED,
+    LEASH_RUN_DISTANCE,
+    LEASH_STIFFNESS,
     LOVE_DECAY,
     LOVE_DURATION,
     LOVE_MAX,
@@ -131,6 +134,12 @@ from config import (
     RIGHT_DAMPING,
     RIGHT_SETTLE,
     RIGHT_STIFFNESS,
+    SELF_PLAY_BALL_DISTANCE,
+    SELF_PLAY_CHANCE,
+    SELF_PLAY_FRAMES_MAX,
+    SELF_PLAY_FRAMES_MIN,
+    SELF_PLAY_PEER_DISTANCE,
+    SELF_PLAY_SPIN_SPEED,
     SOCIAL_CHANCE,
     SOCIAL_GREET_LOVE,
     SOCIAL_REACH,
@@ -309,6 +318,9 @@ class Pet:
         self._drag_prev = None
         self._throw_vx = 0.0
         self._throw_vy = 0.0
+        # Leine (Cmd + ziehen): weiches Nachlaufen statt Teleport, kein Wurf.
+        self.leashing = False
+        self.leash_target = None
         # Shake-to-scare: count quick drag reversals.
         self._shake_dir = 0
         self._shake_count = 0
@@ -336,6 +348,11 @@ class Pet:
         self.social_timer = 0
         self.social_target_x = 0.0
         self._peers = []
+        # Alleine-Spielen: gelangweilt+allein jagt er kurz seinen Schwanz (dreht
+        # sich im Kreis). Flag + Timer; die Drehung selbst laeuft ueber self.angle
+        # (gleicher Render-Pfad wie beim Tumble), self.state bleibt IDLE.
+        self.self_playing = False
+        self.self_play_timer = 0
         # Snack: ein Futter-Objekt, das dieser Pet gerade ansteuert/frisst, plus
         # ein Freude-Timer, der nach dem Essen kurz die Sprech-Lust anhebt.
         self.snack_target = None
@@ -1758,6 +1775,56 @@ class Pet:
         self.state = State.WALK
         self.state_timer = 20
 
+    def _maybe_self_play(self, ball):
+        """Gelangweilt und wirklich allein? Dann faengt er von selbst an, kurz
+        seinen Schwanz zu jagen (dreht sich im Kreis). Nur wenn kein Ball und
+        kein Peer in der Naehe ist und gerade keine andere Aktion laeuft."""
+        if self.self_playing or not self.bored:
+            return False
+        if not self._calm_idle():
+            return False
+        if ball is not None:
+            cx = self.x + WINDOW_W / 2
+            cy = self.y + WINDOW_H / 2
+            if math.hypot(ball.x - cx, ball.y - cy) <= SELF_PLAY_BALL_DISTANCE:
+                return False
+        if self._nearest_peer(SELF_PLAY_PEER_DISTANCE) is not None:
+            return False
+        if random.random() > SELF_PLAY_CHANCE * self._trait("play"):
+            return False
+        self.self_playing = True
+        self.self_play_timer = random.randint(
+            SELF_PLAY_FRAMES_MIN, SELF_PLAY_FRAMES_MAX
+        )
+        self.vx = 0.0
+        self.vy = 0.0
+        self.angle = 0.0
+        self.state = State.IDLE
+        self.state_timer = self.self_play_timer + 10
+        self.spawn_particles("dust", 3)
+        return True
+
+    def _update_self_play(self):
+        """Im-Kreis-Drehen: den Sprite ueber self.angle rotieren (gleicher
+        Render-Pfad wie beim Tumble), dazu ab und zu etwas Staub. Bricht ab,
+        sobald wieder Aktivitaet da ist; danach zurueck in den Normalbetrieb."""
+        self.self_play_timer -= 1
+        if self.self_play_timer <= 0 or not self.bored:
+            self.self_playing = False
+            self.angle = 0.0
+            self.vx = 0.0
+            self.state = State.IDLE
+            self.state_timer = random.randint(40, 90)
+            return
+        # Still an Ort und Stelle, nur drehen. state_timer klein halten, damit das
+        # Ende von update() nicht mit pick_state() dazwischenfunkt.
+        self.vx = 0.0
+        self.state = State.IDLE
+        self.state_timer = 5
+        self.angle = (self.angle + SELF_PLAY_SPIN_SPEED) % 360.0
+        if self.self_play_timer % 8 == 0:
+            self.spawn_particles("dust", 1)
+
     def _greet(self):
         """Trade a little affection with a nearby pet; playful ones hop."""
         self.spawn_particles("heart", random.randint(1, 3))
@@ -2137,6 +2204,13 @@ class Pet:
             self._update_death()
             return
 
+        # An der Leine (Cmd + ziehen): dem Cursor gedaempft hinterherlaufen. Geht
+        # allem anderen vor und laesst den Rest des Hirns aus, damit nichts
+        # dagegen zieht — die Lauf-Animation laeuft ueber self.frame weiter.
+        if self.leashing:
+            self._update_leash(platforms)
+            return
+
         self._update_growth()
         self._update_mood()
 
@@ -2245,11 +2319,15 @@ class Pet:
                     self._update_social()
                 elif self.following:
                     self._update_follow(mouse)
+                elif self.self_playing:
+                    self._update_self_play()
                 elif grounded and self._maybe_greet():
                     pass
                 elif grounded and self._maybe_night_huddle():
                     self._update_huddle()
                 elif grounded and self._maybe_socialize():
+                    pass
+                elif grounded and self._maybe_self_play(ball):
                     pass
                 elif mouse is not None and grounded:
                     self._maybe_follow_mouse(mouse)
@@ -2259,6 +2337,7 @@ class Pet:
                     and not self.socializing
                     and not self.courting
                     and not self.huddling
+                    and not self.self_playing
                     and self.greet_pause == 0
                     and grounded
                 ):
@@ -2376,6 +2455,81 @@ class Pet:
         self.state = State.JUMP
         self.jump_target = None
         self.jump_vy = max(0.0, self.jump_vy)
+
+    def leash_to(self, x, y):
+        """Cmd-Drag: Zielposition (der Cursor) setzen, der der Pet weich folgt.
+        KEIN hartes Teleport — die gedaempfte Annaeherung passiert in
+        _update_leash()."""
+        self.leash_target = (float(x), float(y))
+        if not self.leashing:
+            # Uebergang in den Leinen-Modus: konkurrierende Zustaende raeumen,
+            # damit ihn nichts anderes gleichzeitig bewegt.
+            self.leashing = True
+            self.following = False
+            self.courting = False
+            self.court_arrived = False
+            self.tumbling = False
+            self.righting = False
+            self.joy_flying = False
+            self.airborne = False
+            self.platform = None
+            self.jump_target = None
+            self.angle = 0.0
+            self.spin_speed = 0.0
+            self.vx = 0.0
+            self.vy = 0.0
+            self.jump_vy = 0.0
+            self._drag_prev = None
+            if self.talking:
+                self._stop_talking(repick=False)
+
+    def _update_leash(self, platforms):
+        """An der Leine: x/y naehern sich dem Ziel (Cursor) gedaempft mit
+        Max-Speed an (Feder/Lerp), waehrend je nach Distanz WALK/RUN laeuft."""
+        tx, ty = self.leash_target
+        dx = tx - self.x
+        dy = ty - self.y
+        step_x = dx * LEASH_STIFFNESS
+        step_y = dy * LEASH_STIFFNESS
+        # Nachlauf-Geschwindigkeit kappen, damit ein Cursor-Sprung nicht ruckt.
+        speed = math.hypot(step_x, step_y)
+        if speed > LEASH_MAX_SPEED:
+            scale = LEASH_MAX_SPEED / speed
+            step_x *= scale
+            step_y *= scale
+        self.x += step_x
+        self.y += step_y
+        # In den Bewegungsbereich klemmen (wie beim harten Drag).
+        self.x = max(self.min_x, min(self.max_x - WINDOW_W, self.x))
+        self.y = max(self.min_y - WINDOW_H * 2, min(self.max_y - WINDOW_H, self.y))
+        # Blickrichtung + Lauf-Animation nach Distanz zum Ziel.
+        if step_x > 0.2:
+            self.facing_right = True
+        elif step_x < -0.2:
+            self.facing_right = False
+        dist = math.hypot(dx, dy)
+        self.state = State.RUN if dist > LEASH_RUN_DISTANCE else State.WALK
+        self.vx = step_x
+        # Waehrend der Leine keine Sprung-/Flug-/Tumble-Zustaende.
+        self.airborne = False
+        self.jump_vy = 0.0
+        self.angle = 0.0
+
+    def stop_leash(self):
+        """Leine loslassen: kein Wurf. Sanft an Ort und Stelle zu Boden sinken
+        (Standard-Landepfad, keine Tumble-Physik), dann faellt er in IDLE."""
+        self.leashing = False
+        self.leash_target = None
+        self.vx = 0.0
+        self.jump_vy = 0.0
+        self.spin_speed = 0.0
+        self.angle = 0.0
+        self.tumbling = False
+        self.righting = False
+        self.airborne = True
+        self.platform = None
+        self.jump_target = None
+        self.state = State.JUMP
 
     def drag_to(self, x, y):
         nx, ny = float(x), float(y)

@@ -879,6 +879,7 @@ def pet_cache_key(pet):
     spinning = (
         pet.tumbling
         or pet.righting
+        or pet.self_playing
         or (pet.dying and pet.death_kind == "fall")
     )
     # Rotationswinkel nur in groben Stufen (feiner braucht das Auge nicht) und
@@ -1131,6 +1132,7 @@ def draw_pet_frame(pet):
     spinning = (
         getattr(pet, "tumbling", False)
         or getattr(pet, "righting", False)
+        or getattr(pet, "self_playing", False)
         or (getattr(pet, "dying", False) and getattr(pet, "death_kind", "") == "fall")
     )
     if spinning and abs(angle) > 0.5:

@@ -42,6 +42,7 @@ NSEVENT_LEFT_MOUSE_DOWN = 1
 NSEVENT_LEFT_MOUSE_UP = 2
 NSEVENT_LEFT_MOUSE_DRAGGED = 6
 NSEVENT_SCROLL_WHEEL = 22
+NS_EVENT_MODIFIER_FLAG_COMMAND = 1 << 20   # Cmd-Bit in NSEvent.modifierFlags.
 MENU_ICON_SIZE = 18.0
 CLICK_MOVE_THRESHOLD = 5             # Px of motion that turns a click into a drag.
 
@@ -138,6 +139,11 @@ MIC_FOAM = (236, 92, 88, 255)           # Mic foam tip (a warm "live" accent).
 FOLLOW_CHANCE = 0.004                # Per-frame chance to start chasing the cursor.
 FOLLOW_STOP_DISTANCE = 12            # Stop once this close (px) to the cursor.
 FOLLOW_RUN_DISTANCE = 220            # Run instead of walk when farther than this.
+# Leash-Drag (Cmd + ziehen): Pet laeuft dem Cursor gedaempft hinterher, statt
+# hart zu teleportieren; beim Loslassen kein Wurf.
+LEASH_STIFFNESS = 0.18               # Anteil der Restdistanz pro Frame Richtung Ziel.
+LEASH_MAX_SPEED = 22.0               # Kappung der Nachlauf-Geschwindigkeit (px/frame).
+LEASH_RUN_DISTANCE = 90              # Weiter weg als das -> RUN- statt WALK-Animation.
 IDLE_FX_MIN = 360                    # Min frames between spontaneous heart/stars.
 IDLE_FX_MAX = 1080
 
@@ -331,6 +337,17 @@ GREET_CHANCE = 0.02                  # Chance pro Frame auf eine Begruessung in 
 GREET_COOLDOWN = 300                 # Frames Ruhe nach einer Begruessung (~5s).
 GREET_PAUSE = 24                     # Frames kurzer Stopp waehrend des Begruessens.
 GREET_COLOR = (250, 224, 120, 255)   # Farbe des "!"-Begruessungs-Emotes.
+
+# Alleine-Spielen ------------------------------------------------------------
+# Ein gelangweilter, allein gelassener Pet jagt von selbst kurz seinen Schwanz
+# (dreht sich ein paar Mal im Kreis). Nur wenn wirklich niemand/nichts in der
+# Naehe ist; rein transient. Keine Nutzerinteraktion noetig.
+SELF_PLAY_CHANCE = 0.006             # Chance pro Idle-Tick, wenn gelangweilt+allein.
+SELF_PLAY_PEER_DISTANCE = 180        # Ist ein Peer naeher als das (px), kein Spielen.
+SELF_PLAY_BALL_DISTANCE = 220        # Ist ein Ball naeher als das (px), kein Spielen.
+SELF_PLAY_FRAMES_MIN = 60            # Kuerzeste Dreh-Dauer (~1s bei 60 fps).
+SELF_PLAY_FRAMES_MAX = 120           # Laengste Dreh-Dauer (~2s).
+SELF_PLAY_SPIN_SPEED = 22.0          # Grad pro Frame Rotation waehrend der Drehung.
 
 # Nacht-Kuscheln -------------------------------------------------------------
 # Nachts (lokale Uhrzeit) legen sich ruhige Pets lieber nebeneinander schlafen,

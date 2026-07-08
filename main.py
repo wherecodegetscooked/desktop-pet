@@ -24,6 +24,7 @@ import config
 import persistence
 import lineage
 import playback
+import sharing
 import settings_panel
 import updater
 
@@ -391,6 +392,15 @@ def main():
     # actually playing) so the 60 fps loop never blocks on osascript.
     playback_monitor = playback.PlaybackMonitor()
 
+    # Erkennt best-effort ein laufendes Bildschirm-Teilen (Zoom/Teams/Meet) ueber
+    # die Fensterliste. Nur ein optionaler Automatik-Zusatz; verlaesslich ist der
+    # manuelle Toggle "Bildschirm-Teilen-Modus" (share_manual).
+    share_monitor = sharing.ScreenShareMonitor()
+    # Vom Nutzer im Menue gesetzter Modus (verlaessliche Grundloesung).
+    share_manual = False
+    # True, solange die Pet-Overlays wegen Teilens ausgeblendet sind.
+    pets_hidden = False
+
     clock = pygame.time.Clock()
     last_reassert = 0.0
     last_window_scan = 0.0
@@ -698,6 +708,12 @@ def main():
                 sx = min(max(bounds[0] + 8, sx), bounds[2] - 8)
                 snack = Snack(sx, sy)
                 snack_overlay.reassert_top()
+            elif action == "share_toggle":
+                # Manueller Bildschirm-Teilen-Modus umschalten. Das Haekchen folgt
+                # weiter unten dem manuellen Zustand; das eigentliche Aus-/Einblenden
+                # macht die share_hidden-Transition.
+                share_manual = not share_manual
+                primary.set_share_hidden_check(share_manual)
             elif action == "settings":
                 open_settings()
             elif action == "update" and not pending_update:
@@ -753,10 +769,18 @@ def main():
             if drag_target is None and drag["position"]:
                 drag_target = pet_under_point(pets, mouse)
             if drag_target and drag["position"]:
-                drag_target["pet"].drag_to(*drag["position"])
+                # Cmd gedrueckt -> Leine (weiches Nachlaufen), sonst harter Drag/Wurf.
+                if drag["leash"]:
+                    drag_target["pet"].leash_to(*drag["position"])
+                else:
+                    drag_target["pet"].drag_to(*drag["position"])
         elif not drag["dragging"]:
             if drag_target and drag["released"] and drag["moved"]:
-                drag_target["pet"].release()
+                # Leine: einfach stehen bleiben. Harter Drag: Flick wird zum Wurf.
+                if drag_target["pet"].leashing:
+                    drag_target["pet"].stop_leash()
+                else:
+                    drag_target["pet"].release()
             drag_target = None
 
         if drag["clicks"]:
@@ -794,7 +818,10 @@ def main():
 
         for entry in pets:
             pet = entry["pet"]
-            if entry is drag_target:
+            # Ein hart gezogener Pet wird per drag_to() direkt positioniert und
+            # ueberspringt update(). Ein geleinter Pet dagegen laeuft dem Cursor
+            # in update() (_update_leash) hinterher und muss darum durchlaufen.
+            if entry is drag_target and not pet.leashing:
                 continue
             # Other pets' centres, so this one can wander over and socialize.
             pet.observe_peers([
@@ -935,25 +962,64 @@ def main():
                 if pets:
                     pets[0]["pet"].start_talk("Break time!")
 
-        for entry in pets:
-            render_pet(entry, display_rects)
-
-        if ball is not None:
-            ball_overlay.move(round(ball.x - BALL_WIN / 2), round(ball.y - BALL_WIN / 2))
-            ball_overlay.show_surface(draw_ball())
-
-        # Snack zeichnen bzw. nach dem Essen entfernen. Der Byte-Dirty-Check in
-        # show_surface haelt den Push billig (identisches Sprite jeden Frame).
-        if snack is not None:
-            if snack.eaten:
+        # Bildschirm-Teilen: manueller Toggle ODER automatische Erkennung. Bei
+        # aktivem Zustand alle Pet-Overlays einmalig blanken + click-through
+        # setzen (gleiches Muster wie beim Entfernen eines Pets); die Simulation
+        # laeuft unsichtbar weiter, es geht kein State/keine Position verloren.
+        share_hidden = share_manual or share_monitor.sharing
+        if share_hidden and not pets_hidden:
+            blank = pygame.Surface((WINDOW_W, WINDOW_H), pygame.SRCALPHA)
+            blank.fill(CLEAR)
+            fx_blank = pygame.Surface((FX_W, FX_H), pygame.SRCALPHA)
+            fx_blank.fill(CLEAR)
+            for entry in pets:
+                entry["overlay"].show_surface(blank)
+                entry["overlay"].set_mouse_ignore(True)
+                entry["fx"].show_surface(fx_blank)
+                entry["fx_visible"] = False
+                entry["pet_key"] = None   # Wiederherstellung -> Neuzeichnen
+                entry["pet_pos"] = None
+            if ball_overlay is not None:
+                ball_overlay.close()
+            if snack_overlay is not None:
                 snack_overlay.close()
-                snack_overlay = None
-                snack = None
-            else:
-                snack_overlay.move(
-                    round(snack.x - SNACK_WIN / 2), round(snack.y - SNACK_WIN / 2)
+            pets_hidden = True
+        elif not share_hidden and pets_hidden:
+            for entry in pets:
+                entry["pet_key"] = None
+                entry["pet_pos"] = None
+                entry["fx_visible"] = False
+                # Das Menue-Fenster bleibt geparkt, wenn es gerade keinen Pet hostet.
+                if not (entry["overlay"] is menu_overlay and menu_overlay_free):
+                    entry["overlay"].set_mouse_ignore(False)
+            if ball is not None and ball_overlay is not None:
+                ball_overlay.reassert_top()
+            if snack is not None and snack_overlay is not None:
+                snack_overlay.reassert_top()
+            pets_hidden = False
+
+        if not pets_hidden:
+            for entry in pets:
+                render_pet(entry, display_rects)
+
+            if ball is not None:
+                ball_overlay.move(
+                    round(ball.x - BALL_WIN / 2), round(ball.y - BALL_WIN / 2)
                 )
-                snack_overlay.show_surface(draw_snack())
+                ball_overlay.show_surface(draw_ball())
+
+            # Snack zeichnen bzw. nach dem Essen entfernen. Der Byte-Dirty-Check in
+            # show_surface haelt den Push billig (identisches Sprite jeden Frame).
+            if snack is not None:
+                if snack.eaten:
+                    snack_overlay.close()
+                    snack_overlay = None
+                    snack = None
+                else:
+                    snack_overlay.move(
+                        round(snack.x - SNACK_WIN / 2), round(snack.y - SNACK_WIN / 2)
+                    )
+                    snack_overlay.show_surface(draw_snack())
 
         # Einstellungsfenster mit aktuellem Kontext neu zeichnen (nur pushen, wenn
         # sich etwas geaendert hat). Liegt ganz oben.
@@ -997,7 +1063,7 @@ def main():
             if settings.take_dirty():
                 settings_overlay.show_surface(surf)
 
-        if now - last_reassert > 0.5:
+        if not pets_hidden and now - last_reassert > 0.5:
             for entry in pets:
                 entry["overlay"].reassert_top()
                 entry["fx"].reassert_top()
@@ -1029,6 +1095,7 @@ def main():
     })
 
     playback_monitor.stop()
+    share_monitor.stop()
     pygame.quit()
 
 

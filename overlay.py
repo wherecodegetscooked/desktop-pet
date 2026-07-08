@@ -33,6 +33,7 @@ from config import (
     NSEVENT_LEFT_MOUSE_DRAGGED,
     NSEVENT_LEFT_MOUSE_UP,
     NSEVENT_SCROLL_WHEEL,
+    NS_EVENT_MODIFIER_FLAG_COMMAND,
     WINDOW_LIST_EXCLUDE_DESKTOP,
     WINDOW_LIST_ON_SCREEN_ONLY,
 )
@@ -69,6 +70,8 @@ class MacOverlay:
         self.menu_actions = []
         self.menu_controller = None
         self._menu_imps = []
+        # Menuepunkt "Bildschirm-Teilen-Modus"; Referenz fuer das Haekchen.
+        self._share_item = None
         self.objc = _objc_setup()
         self.cg = self._load_core_graphics()
         self.cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
@@ -95,6 +98,9 @@ class MacOverlay:
         self.press_origin = None
         self.press_moved = False
         self.pending_clicks = 0
+        # Cmd beim Drag-Start gedrueckt -> Leine (weiches Nachlaufen) statt Wurf.
+        # Fuer die ganze Geste festgehalten, nicht pro Frame neu geprueft.
+        self.drag_leash = False
         self._seen_visible = False
 
         # Multi-monitor state, populated by refresh_displays().
@@ -341,6 +347,14 @@ class MacOverlay:
             menu, "Stop Focus", "s", self.menu_controller, b"stopFocus:"
         )
         _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
+        # Manueller Bildschirm-Teilen-Modus: vor dem Teilen einschalten, dann
+        # blenden sich alle Pets aus. Haekchen zeigt den Zustand. Eine optionale
+        # Heuristik (sharing.py) kann zusaetzlich automatisch ausblenden.
+        self._share_item = self._add_menu_item(
+            menu, "Bildschirm-Teilen-Modus", "", self.menu_controller,
+            b"toggleShareHide:"
+        )
+        _msg(objc, menu, "addItem:", _msg(objc, NSMenuItem, "separatorItem"))
         self._add_menu_item(
             menu, "Toss a ball", "t", self.menu_controller, b"tossBall:"
         )
@@ -447,6 +461,7 @@ class MacOverlay:
             (b"tossBall:", "ball"),
             (b"removeBall:", "ball_remove"),
             (b"dropSnack:", "snack"),
+            (b"toggleShareHide:", "share_toggle"),
             (b"openSettings:", "settings"),
             (b"updateApp:", "update"),
         ):
@@ -466,6 +481,14 @@ class MacOverlay:
         actions = self.menu_actions[:]
         self.menu_actions.clear()
         return actions
+
+    def set_share_hidden_check(self, on):
+        """Haekchen am 'Bildschirm-Teilen-Modus'-Menuepunkt setzen (An/Aus)."""
+        if self._share_item is None:
+            return
+        # NSControlStateValueOn = 1, ...Off = 0; setState: nimmt NSInteger.
+        _msg(self.objc, self._share_item, "setState:", 1 if on else 0,
+             argtypes=[ctypes.c_long])
 
     def close(self):
         """Hide this overlay's window (used when a bred pet is removed)."""
@@ -690,6 +713,11 @@ class MacOverlay:
         if event_type == NSEVENT_LEFT_MOUSE_DOWN:
             self.dragging = True
             self.drag_released = False
+            # Cmd-Zustand einmalig zum Drag-Start festhalten (gilt fuer die ganze
+            # Geste), damit Los-/Wiederdruecken der Taste den Modus nicht flackern
+            # laesst.
+            flags = _msg(self.objc, event, "modifierFlags", restype=ctypes.c_ulong)
+            self.drag_leash = bool(flags & NS_EVENT_MODIFIER_FLAG_COMMAND)
             self.drag_offset = _msg(
                 self.objc,
                 event,
@@ -844,6 +872,7 @@ class MacOverlay:
             "released": self.drag_released,
             "moved": self.press_moved,
             "clicks": self.pending_clicks,
+            "leash": self.drag_leash,
         }
         self.drag_released = False
         self.pending_clicks = 0
